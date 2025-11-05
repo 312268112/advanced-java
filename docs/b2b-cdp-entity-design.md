@@ -1,6 +1,6 @@
 # B2B CDP 实体设计详细方案
 
-## 📋 目录
+## 目录
 - [整体架构](#整体架构)
 - [核心实体设计](#核心实体设计)
 - [实体关系图](#实体关系图)
@@ -14,752 +14,858 @@
 ### 实体分层架构图
 
 ```mermaid
-graph TB
-    subgraph "数据源层"
-        DS1[官网]
-        DS2[微信生态]
-        DS3[抖音]
-        DS4[线下活动]
-        DS5[电话/邮件]
-        DS6[CRM系统]
-        DS7[第三方平台]
+flowchart TD
+    subgraph DataSource["数据源层 Data Source Layer"]
+        direction LR
+        DS1["官方网站<br/>Official Website"]
+        DS2["微信生态<br/>WeChat Ecosystem"]
+        DS3["抖音平台<br/>Douyin Platform"]
+        DS4["线下活动<br/>Offline Events"]
+        DS5["电话邮件<br/>Phone & Email"]
+        DS6["CRM系统<br/>CRM System"]
+        DS7["第三方平台<br/>3rd Party Platform"]
     end
     
-    subgraph "渠道层"
-        Channel[Channel 渠道]
+    subgraph ChannelLayer["渠道层 Channel Layer"]
+        CH["Channel<br/>渠道管理"]
     end
     
-    subgraph "交互层"
-        Touchpoint[Touchpoint 触点]
-        Event[Event 事件]
-        Campaign[Campaign 营销活动]
+    subgraph InteractionLayer["交互层 Interaction Layer"]
+        TP["Touchpoint<br/>客户触点"]
+        EV["Event<br/>行为事件"]
+        CM["Campaign<br/>营销活动"]
     end
     
-    subgraph "客户主体层"
-        Contact[Contact 联系人]
-        Lead[Lead 线索]
-        Account[Account 企业账户]
+    subgraph EntityLayer["客户实体层 Customer Entity Layer"]
+        CT["Contact<br/>联系人"]
+        LD["Lead<br/>线索"]
+        AC["Account<br/>企业账户"]
+        AS["AccountSummary<br/>账户汇总数据"]
     end
     
-    subgraph "业务层"
-        Opportunity[Opportunity 商机]
-        Product[Product 产品]
-        Order[Order 订单]
+    subgraph BusinessLayer["业务层 Business Layer"]
+        OP["Opportunity<br/>商机"]
+        PR["Product<br/>产品"]
+        OR["Order<br/>订单"]
     end
     
-    subgraph "洞察层"
-        Segment[Segment 客户分群]
-        Tag[Tag 标签]
-        Score[Score 评分]
-        Journey[Journey 客户旅程]
-        Attribution[Attribution 归因]
+    subgraph InsightLayer["洞察层 Insight Layer"]
+        SG["Segment<br/>客户分群"]
+        TG["Tag<br/>标签体系"]
+        SC["Score<br/>评分模型"]
+        JN["Journey<br/>客户旅程"]
+        AT["Attribution<br/>营销归因"]
     end
     
-    DS1 & DS2 & DS3 & DS4 & DS5 & DS6 & DS7 --> Channel
-    Channel --> Touchpoint
-    Channel --> Event
-    Campaign --> Touchpoint
-    Touchpoint --> Contact
-    Touchpoint --> Lead
-    Event --> Contact
-    Contact --> Account
-    Lead --> Contact
-    Lead --> Opportunity
-    Account --> Opportunity
-    Opportunity --> Product
-    Opportunity --> Order
-    Contact --> Segment
-    Account --> Segment
-    Lead --> Tag
-    Contact --> Tag
-    Account --> Tag
-    Contact --> Score
-    Account --> Score
-    Lead --> Score
-    Contact --> Journey
-    Campaign --> Attribution
-    Opportunity --> Attribution
+    DataSource --> CH
+    CH --> TP
+    CH --> EV
+    CM --> TP
+    TP --> CT
+    TP --> LD
+    EV --> CT
+    CT --> AC
+    AC --> AS
+    LD --> CT
+    LD --> OP
+    AC --> OP
+    OP --> PR
+    OP --> OR
+    CT --> SG
+    AC --> SG
+    LD --> TG
+    CT --> TG
+    AC --> TG
+    CT --> SC
+    AC --> SC
+    LD --> SC
+    CT --> JN
+    CM --> AT
+    OP --> AT
+    
+    classDef sourceStyle fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef channelStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef interactionStyle fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef entityStyle fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef businessStyle fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    classDef insightStyle fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    
+    class DS1,DS2,DS3,DS4,DS5,DS6,DS7 sourceStyle
+    class CH channelStyle
+    class TP,EV,CM interactionStyle
+    class CT,LD,AC,AS entityStyle
+    class OP,PR,OR businessStyle
+    class SG,TG,SC,JN,AT insightStyle
 ```
 
 ---
 
 ## 核心实体设计
 
-### 1. Account（企业账户）- 核心实体
+### 1. Account (企业账户) - 核心实体
 
 ```mermaid
-classDiagram
-    class Account {
-        +String account_id PK
-        +String account_name
-        +String unified_social_credit_code
-        +String account_type
-        +String industry_id FK
-        +String account_status
-        +String account_level
-        +Decimal annual_revenue
-        +Integer employee_count
-        +String company_website
-        +String company_address
-        +String province
-        +String city
-        +String district
-        +String account_source
-        +String primary_channel_id FK
-        +String owner_user_id
-        +DateTime created_at
-        +DateTime updated_at
-        +JSON custom_fields
-        +String[] tags
-        +Integer health_score
-        +String lifecycle_stage
+erDiagram
+    Account ||--o{ AccountChannelIdentity : "has"
+    Account ||--|| AccountSummary : "aggregates to"
+    Account ||--o{ AccountRelation : "parent of"
+    Account ||--o{ AccountRelation : "child of"
+    
+    Account {
+        varchar(64) account_id PK
+        varchar(200) account_name
+        varchar(18) unified_social_credit_code UK
+        varchar(50) account_type
+        varchar(64) industry_id FK
+        varchar(50) account_status
+        varchar(50) account_level
+        decimal(18_2) annual_revenue
+        int employee_count
+        varchar(500) company_website
+        varchar(500) company_address
+        varchar(50) province
+        varchar(50) city
+        varchar(50) district
+        varchar(100) account_source
+        varchar(64) primary_channel_id FK
+        varchar(64) owner_user_id FK
+        datetime created_at
+        datetime updated_at
+        json custom_fields
+        varchar(50) lifecycle_stage
     }
     
-    class AccountChannelIdentity {
-        +String identity_id PK
-        +String account_id FK
-        +String channel_id FK
-        +String channel_account_id
-        +String identity_type
-        +Boolean is_verified
-        +DateTime first_seen_at
-        +DateTime last_seen_at
-        +JSON additional_info
+    AccountChannelIdentity {
+        varchar(64) identity_id PK
+        varchar(64) account_id FK
+        varchar(64) channel_id FK
+        varchar(200) channel_account_id
+        varchar(50) identity_type
+        boolean is_verified
+        datetime first_seen_at
+        datetime last_seen_at
+        json additional_info
     }
     
-    class AccountRelation {
-        +String relation_id PK
-        +String parent_account_id FK
-        +String child_account_id FK
-        +String relation_type
-        +DateTime created_at
+    AccountSummary {
+        varchar(64) summary_id PK
+        varchar(64) account_id FK UK
+        int total_contacts
+        int total_opportunities
+        int total_leads
+        decimal(18_2) total_revenue
+        decimal(18_2) lifetime_value
+        int won_opportunities
+        int lost_opportunities
+        decimal(5_2) win_rate
+        int total_touchpoints
+        int active_campaigns
+        int health_score
+        datetime last_activity_at
+        datetime last_purchase_at
+        date first_purchase_date
+        date latest_opportunity_date
+        int days_since_last_contact
+        datetime calculated_at
+        datetime updated_at
     }
     
-    Account "1" --> "*" AccountChannelIdentity
-    Account "1" --> "*" AccountRelation : parent
-    Account "1" --> "*" AccountRelation : child
+    AccountRelation {
+        varchar(64) relation_id PK
+        varchar(64) parent_account_id FK
+        varchar(64) child_account_id FK
+        varchar(50) relation_type
+        datetime created_at
+    }
 ```
 
-**字段说明：**
+**Account 字段说明:**
 - `account_id`: 全局唯一账户ID
 - `unified_social_credit_code`: 统一社会信用代码（企业唯一标识）
-- `account_type`: 客户类型（潜在客户/现有客户/合作伙伴/竞争对手）
-- `account_status`: 账户状态（活跃/休眠/流失/黑名单）
-- `account_level`: 客户等级（战略级/重要级/普通级）
-- `lifecycle_stage`: 生命周期阶段（认知期/考虑期/决策期/留存期/扩展期）
+- `account_type`: 客户类型（CUSTOMER/PARTNER/COMPETITOR/PROSPECT）
+- `account_status`: 账户状态（ACTIVE/DORMANT/CHURNED/BLACKLIST）
+- `account_level`: 客户等级（STRATEGIC/IMPORTANT/NORMAL）
+- `lifecycle_stage`: 生命周期阶段（AWARENESS/CONSIDERATION/DECISION/RETENTION/EXPANSION）
+
+**AccountSummary 字段说明:**
+- `total_contacts`: 关联的联系人总数
+- `total_opportunities`: 商机总数
+- `total_revenue`: 累计收入
+- `lifetime_value`: 客户生命周期价值
+- `win_rate`: 赢单率
+- `health_score`: 健康度评分（0-100）
+- `last_activity_at`: 最后活跃时间
+- `days_since_last_contact`: 距离上次联系天数
 
 ---
 
-### 2. Contact（联系人）- 核心实体
+### 2. Contact (联系人) - 核心实体
 
 ```mermaid
-classDiagram
-    class Contact {
-        +String contact_id PK
-        +String contact_name
-        +String mobile_phone
-        +String email
-        +String wechat_id
-        +String job_title
-        +String department
-        +String contact_status
-        +String primary_account_id FK
-        +String contact_source
-        +String primary_channel_id FK
-        +String owner_user_id
-        +DateTime created_at
-        +DateTime updated_at
-        +JSON custom_fields
-        +String[] tags
-        +Integer engagement_score
-        +String lifecycle_stage
-        +Boolean is_decision_maker
-        +Boolean is_verified
+erDiagram
+    Contact ||--o{ ContactChannelIdentity : "has"
+    Contact ||--o{ AccountContactRelation : "belongs to"
+    Contact ||--|| ContactSummary : "aggregates to"
+    
+    Contact {
+        varchar(64) contact_id PK
+        varchar(100) contact_name
+        varchar(20) mobile_phone UK
+        varchar(200) email UK
+        varchar(100) wechat_id
+        varchar(100) job_title
+        varchar(100) department
+        varchar(50) contact_status
+        varchar(64) primary_account_id FK
+        varchar(100) contact_source
+        varchar(64) primary_channel_id FK
+        varchar(64) owner_user_id FK
+        datetime created_at
+        datetime updated_at
+        json custom_fields
+        varchar(50) lifecycle_stage
+        boolean is_decision_maker
+        boolean is_verified
     }
     
-    class ContactChannelIdentity {
-        +String identity_id PK
-        +String contact_id FK
-        +String channel_id FK
-        +String channel_user_id
-        +String identity_type
-        +Boolean is_primary
-        +Boolean is_verified
-        +DateTime first_seen_at
-        +DateTime last_seen_at
-        +JSON additional_info
+    ContactChannelIdentity {
+        varchar(64) identity_id PK
+        varchar(64) contact_id FK
+        varchar(64) channel_id FK
+        varchar(200) channel_user_id
+        varchar(50) identity_type
+        boolean is_primary
+        boolean is_verified
+        datetime first_seen_at
+        datetime last_seen_at
+        json additional_info
     }
     
-    class AccountContactRelation {
-        +String relation_id PK
-        +String account_id FK
-        +String contact_id FK
-        +String role_in_account
-        +String decision_level
-        +Boolean is_primary_contact
-        +String relationship_status
-        +DateTime relation_start_date
-        +DateTime relation_end_date
-        +DateTime created_at
-        +DateTime updated_at
+    ContactSummary {
+        varchar(64) summary_id PK
+        varchar(64) contact_id FK UK
+        int total_touchpoints
+        int total_events
+        int email_opens
+        int email_clicks
+        int form_submissions
+        int content_downloads
+        int engagement_score
+        datetime last_activity_at
+        datetime last_email_sent_at
+        datetime last_email_opened_at
+        int days_since_last_activity
+        int campaign_responses
+        datetime calculated_at
+        datetime updated_at
     }
     
-    Contact "1" --> "*" ContactChannelIdentity
-    Contact "1" --> "*" AccountContactRelation
+    AccountContactRelation {
+        varchar(64) relation_id PK
+        varchar(64) account_id FK
+        varchar(64) contact_id FK
+        varchar(100) role_in_account
+        varchar(50) decision_level
+        boolean is_primary_contact
+        varchar(50) relationship_status
+        date relation_start_date
+        date relation_end_date
+        datetime created_at
+        datetime updated_at
+    }
 ```
 
-**字段说明：**
-- `decision_level`: 决策层级（决策者/影响者/使用者/把关者）
-- `engagement_score`: 参与度评分（基于互动频率和深度）
-- `role_in_account`: 在企业中的角色（CEO/CTO/采购经理等）
+**Contact 字段说明:**
+- `decision_level`: 决策层级（DECISION_MAKER/INFLUENCER/USER/GATEKEEPER）
+- `lifecycle_stage`: 生命周期阶段（SUBSCRIBER/LEAD/MQL/SQL/OPPORTUNITY/CUSTOMER）
+
+**ContactSummary 字段说明:**
+- `total_touchpoints`: 总触点数
+- `engagement_score`: 参与度评分（0-100）
+- `email_opens`: 邮件打开次数
+- `email_clicks`: 邮件点击次数
+- `days_since_last_activity`: 距离上次活跃天数
 
 ---
 
-### 3. Lead（线索）- 核心实体
+### 3. Lead (线索) - 核心实体
 
 ```mermaid
-classDiagram
-    class Lead {
-        +String lead_id PK
-        +String lead_name
-        +String company_name
-        +String mobile_phone
-        +String email
-        +String wechat_id
-        +String job_title
-        +String lead_source
-        +String channel_id FK
-        +String campaign_id FK
-        +String lead_status
-        +Integer lead_score
-        +String lead_grade
-        +String industry_id FK
-        +String province
-        +String city
-        +String owner_user_id
-        +DateTime created_at
-        +DateTime updated_at
-        +DateTime last_contacted_at
-        +DateTime converted_at
-        +String converted_contact_id FK
-        +String converted_account_id FK
-        +String converted_opportunity_id FK
-        +JSON custom_fields
-        +String[] tags
-        +Boolean is_qualified
+erDiagram
+    Lead ||--o{ LeadChannelIdentity : "has"
+    Lead ||--|| LeadSummary : "aggregates to"
+    
+    Lead {
+        varchar(64) lead_id PK
+        varchar(100) lead_name
+        varchar(200) company_name
+        varchar(20) mobile_phone
+        varchar(200) email
+        varchar(100) wechat_id
+        varchar(100) job_title
+        varchar(100) lead_source
+        varchar(64) channel_id FK
+        varchar(64) campaign_id FK
+        varchar(50) lead_status
+        int lead_score
+        varchar(10) lead_grade
+        varchar(64) industry_id FK
+        varchar(50) province
+        varchar(50) city
+        varchar(64) owner_user_id FK
+        datetime created_at
+        datetime updated_at
+        datetime last_contacted_at
+        datetime converted_at
+        varchar(64) converted_contact_id FK
+        varchar(64) converted_account_id FK
+        varchar(64) converted_opportunity_id FK
+        json custom_fields
+        boolean is_qualified
     }
     
-    class LeadChannelIdentity {
-        +String identity_id PK
-        +String lead_id FK
-        +String channel_id FK
-        +String channel_user_id
-        +DateTime captured_at
-        +JSON utm_params
-        +JSON additional_info
+    LeadChannelIdentity {
+        varchar(64) identity_id PK
+        varchar(64) lead_id FK
+        varchar(64) channel_id FK
+        varchar(200) channel_user_id
+        datetime captured_at
+        json utm_params
+        json additional_info
     }
     
-    Lead "1" --> "*" LeadChannelIdentity
+    LeadSummary {
+        varchar(64) summary_id PK
+        varchar(64) lead_id FK UK
+        int total_touchpoints
+        int total_events
+        int form_submissions
+        int content_downloads
+        int page_views
+        int days_in_pipeline
+        int contact_attempts
+        datetime last_activity_at
+        datetime last_contact_attempt_at
+        datetime calculated_at
+        datetime updated_at
+    }
 ```
 
-**字段说明：**
-- `lead_status`: 线索状态（新建/联系中/已限定/已转化/无效）
-- `lead_score`: 线索评分（基于行为和画像的综合评分）
+**Lead 字段说明:**
+- `lead_status`: 线索状态（NEW/CONTACTED/QUALIFIED/CONVERTED/DISQUALIFIED）
+- `lead_score`: 线索评分（0-100）
 - `lead_grade`: 线索等级（A/B/C/D）
 - `is_qualified`: 是否为合格线索（MQL/SQL）
 
 ---
 
-### 4. Opportunity（商机）- 核心实体
+### 4. Opportunity (商机) - 核心实体
 
 ```mermaid
-classDiagram
-    class Opportunity {
-        +String opportunity_id PK
-        +String opportunity_name
-        +String account_id FK
-        +String primary_contact_id FK
-        +String lead_id FK
-        +String opportunity_type
-        +String opportunity_source
-        +Decimal amount
-        +String currency
-        +String stage
-        +Integer probability
-        +Date expected_close_date
-        +Date actual_close_date
-        +String close_reason
-        +String owner_user_id
-        +String[] product_ids FK
-        +String campaign_id FK
-        +DateTime created_at
-        +DateTime updated_at
-        +JSON custom_fields
-        +String[] tags
-        +Integer days_in_stage
-        +Boolean is_won
-        +Boolean is_lost
+erDiagram
+    Opportunity ||--o{ OpportunityStageHistory : "has"
+    Opportunity ||--o{ OpportunityProduct : "contains"
+    
+    Opportunity {
+        varchar(64) opportunity_id PK
+        varchar(200) opportunity_name
+        varchar(64) account_id FK
+        varchar(64) primary_contact_id FK
+        varchar(64) lead_id FK
+        varchar(50) opportunity_type
+        varchar(100) opportunity_source
+        decimal(18_2) amount
+        varchar(10) currency
+        varchar(50) stage
+        int probability
+        date expected_close_date
+        date actual_close_date
+        varchar(200) close_reason
+        varchar(64) owner_user_id FK
+        json product_ids
+        varchar(64) campaign_id FK
+        datetime created_at
+        datetime updated_at
+        json custom_fields
+        int days_in_stage
+        boolean is_won
+        boolean is_lost
     }
     
-    class OpportunityStageHistory {
-        +String history_id PK
-        +String opportunity_id FK
-        +String from_stage
-        +String to_stage
-        +DateTime changed_at
-        +String changed_by_user_id
-        +String change_reason
-        +Integer duration_days
+    OpportunityStageHistory {
+        varchar(64) history_id PK
+        varchar(64) opportunity_id FK
+        varchar(50) from_stage
+        varchar(50) to_stage
+        datetime changed_at
+        varchar(64) changed_by_user_id FK
+        varchar(200) change_reason
+        int duration_days
     }
     
-    class OpportunityProduct {
-        +String opp_product_id PK
-        +String opportunity_id FK
-        +String product_id FK
-        +Integer quantity
-        +Decimal unit_price
-        +Decimal total_price
-        +Decimal discount
-        +String product_description
+    OpportunityProduct {
+        varchar(64) opp_product_id PK
+        varchar(64) opportunity_id FK
+        varchar(64) product_id FK
+        int quantity
+        decimal(18_2) unit_price
+        decimal(18_2) total_price
+        decimal(18_2) discount
+        text product_description
     }
-    
-    Opportunity "1" --> "*" OpportunityStageHistory
-    Opportunity "1" --> "*" OpportunityProduct
 ```
 
-**字段说明：**
-- `stage`: 阶段（线索/需求确认/方案设计/商务谈判/合同签订/已赢单/已输单）
+**Opportunity 字段说明:**
+- `stage`: 阶段（LEAD/QUALIFICATION/NEEDS_ANALYSIS/PROPOSAL/NEGOTIATION/CONTRACT/CLOSED_WON/CLOSED_LOST）
 - `probability`: 赢单概率（0-100）
-- `opportunity_type`: 商机类型（新客户/追加销售/续约/交叉销售）
+- `opportunity_type`: 商机类型（NEW_BUSINESS/UPSELL/RENEWAL/CROSS_SELL）
 
 ---
 
-### 5. Channel（渠道）- 核心实体
+### 5. Channel (渠道) - 核心实体
 
 ```mermaid
-classDiagram
-    class Channel {
-        +String channel_id PK
-        +String channel_name
-        +String channel_type
-        +String channel_category
-        +String parent_channel_id FK
-        +String channel_status
-        +JSON channel_config
-        +Decimal cost
-        +DateTime created_at
-        +DateTime updated_at
-        +JSON custom_fields
+erDiagram
+    Channel ||--o{ ChannelPerformance : "tracks"
+    
+    Channel {
+        varchar(64) channel_id PK
+        varchar(100) channel_name
+        varchar(50) channel_type
+        varchar(50) channel_category
+        varchar(64) parent_channel_id FK
+        varchar(50) channel_status
+        json channel_config
+        decimal(18_2) cost
+        datetime created_at
+        datetime updated_at
+        json custom_fields
     }
     
-    class ChannelPerformance {
-        +String performance_id PK
-        +String channel_id FK
-        +Date stat_date
-        +Integer lead_count
-        +Integer contact_count
-        +Integer opportunity_count
-        +Decimal revenue
-        +Decimal cost
-        +Decimal roi
-        +Integer conversion_count
-        +Decimal conversion_rate
-    }
-    
-    Channel "1" --> "*" ChannelPerformance
-```
-
-**渠道类型枚举：**
-- 线上渠道：官网、SEO、SEM、社交媒体、内容营销
-- 社交渠道：微信、企业微信、抖音、快手、小红书
-- 线下渠道：展会、研讨会、地推活动
-- 合作渠道：合作伙伴、代理商、分销商
-- 直销渠道：电话、邮件、销售拜访
-
----
-
-### 6. Campaign（营销活动）- 核心实体
-
-```mermaid
-classDiagram
-    class Campaign {
-        +String campaign_id PK
-        +String campaign_name
-        +String campaign_type
-        +String campaign_status
-        +String[] channel_ids FK
-        +Date start_date
-        +Date end_date
-        +Decimal budget
-        +Decimal actual_cost
-        +String target_audience
-        +String owner_user_id
-        +DateTime created_at
-        +DateTime updated_at
-        +JSON custom_fields
-        +String[] tags
-    }
-    
-    class CampaignPerformance {
-        +String performance_id PK
-        +String campaign_id FK
-        +Date stat_date
-        +Integer impressions
-        +Integer clicks
-        +Integer leads_generated
-        +Integer opportunities_generated
-        +Decimal revenue
-        +Decimal roi
-        +Decimal cpl
-        +Decimal cpa
-    }
-    
-    class CampaignMember {
-        +String member_id PK
-        +String campaign_id FK
-        +String member_type
-        +String member_ref_id
-        +String member_status
-        +DateTime joined_at
-        +DateTime responded_at
-        +String response_status
-        +JSON response_data
-    }
-    
-    Campaign "1" --> "*" CampaignPerformance
-    Campaign "1" --> "*" CampaignMember
-```
-
-**活动类型：**
-- 网络研讨会（Webinar）
-- 线下会议/展会
-- 邮件营销
-- 内容营销（白皮书、案例分享）
-- 产品试用活动
-- 行业峰会
-
----
-
-### 7. Touchpoint（触点/互动记录）- 核心实体
-
-```mermaid
-classDiagram
-    class Touchpoint {
-        +String touchpoint_id PK
-        +String touchpoint_type
-        +String channel_id FK
-        +String campaign_id FK
-        +String contact_id FK
-        +String lead_id FK
-        +String account_id FK
-        +DateTime touchpoint_time
-        +String touchpoint_direction
-        +String touchpoint_status
-        +String content_type
-        +String content_id FK
-        +String subject
-        +Text description
-        +Integer duration_seconds
-        +String owner_user_id
-        +JSON metadata
-        +JSON utm_params
-        +DateTime created_at
-    }
-    
-    class TouchpointAttachment {
-        +String attachment_id PK
-        +String touchpoint_id FK
-        +String file_name
-        +String file_url
-        +String file_type
-        +Integer file_size
-        +DateTime uploaded_at
-    }
-    
-    Touchpoint "1" --> "*" TouchpointAttachment
-```
-
-**触点类型：**
-- 网站浏览
-- 表单提交
-- 内容下载
-- 邮件互动（打开/点击）
-- 电话沟通
-- 会议/拜访
-- 在线聊天
-- 社交媒体互动
-
----
-
-### 8. Event（行为事件）- 核心实体
-
-```mermaid
-classDiagram
-    class Event {
-        +String event_id PK
-        +String event_name
-        +String event_type
-        +String channel_id FK
-        +String contact_id FK
-        +String lead_id FK
-        +String account_id FK
-        +DateTime event_time
-        +String session_id
-        +String device_type
-        +String browser
-        +String os
-        +String ip_address
-        +String page_url
-        +String referrer_url
-        +JSON event_properties
-        +JSON utm_params
-        +DateTime created_at
+    ChannelPerformance {
+        varchar(64) performance_id PK
+        varchar(64) channel_id FK
+        date stat_date
+        int lead_count
+        int contact_count
+        int opportunity_count
+        decimal(18_2) revenue
+        decimal(18_2) cost
+        decimal(18_2) roi
+        int conversion_count
+        decimal(5_2) conversion_rate
+        datetime created_at
     }
 ```
 
-**事件类型：**
-- 页面浏览（page_view）
-- 按钮点击（button_click）
-- 表单开始（form_start）
-- 表单提交（form_submit）
-- 文件下载（file_download）
-- 视频播放（video_play）
-- 产品试用（product_trial）
-- 搜索（search）
+**渠道类型 (channel_type):**
+- WEBSITE - 官方网站
+- SEO - 搜索引擎优化
+- SEM - 搜索引擎营销
+- WECHAT - 微信
+- ENTERPRISE_WECHAT - 企业微信
+- DOUYIN - 抖音
+- EMAIL - 邮件营销
+- PHONE - 电话
+- OFFLINE_EVENT - 线下活动
+- EXHIBITION - 展会
+- PARTNER - 合作伙伴
 
 ---
 
-### 9. Product（产品/解决方案）- 核心实体
+### 6. Campaign (营销活动) - 核心实体
 
 ```mermaid
-classDiagram
-    class Product {
-        +String product_id PK
-        +String product_name
-        +String product_code
-        +String product_category
-        +String product_type
-        +String product_status
-        +Text description
-        +Decimal list_price
-        +String currency
-        +String pricing_model
-        +String[] feature_list
-        +DateTime created_at
-        +DateTime updated_at
-        +JSON custom_fields
+erDiagram
+    Campaign ||--o{ CampaignPerformance : "tracks"
+    Campaign ||--o{ CampaignMember : "has"
+    
+    Campaign {
+        varchar(64) campaign_id PK
+        varchar(200) campaign_name
+        varchar(50) campaign_type
+        varchar(50) campaign_status
+        json channel_ids
+        date start_date
+        date end_date
+        decimal(18_2) budget
+        decimal(18_2) actual_cost
+        text target_audience
+        varchar(64) owner_user_id FK
+        datetime created_at
+        datetime updated_at
+        json custom_fields
     }
     
-    class ProductCategory {
-        +String category_id PK
-        +String category_name
-        +String parent_category_id FK
-        +Integer sort_order
+    CampaignPerformance {
+        varchar(64) performance_id PK
+        varchar(64) campaign_id FK
+        date stat_date
+        int impressions
+        int clicks
+        int leads_generated
+        int opportunities_generated
+        decimal(18_2) revenue
+        decimal(18_2) roi
+        decimal(18_2) cpl
+        decimal(18_2) cpa
+        datetime created_at
     }
     
-    Product "*" --> "1" ProductCategory
+    CampaignMember {
+        varchar(64) member_id PK
+        varchar(64) campaign_id FK
+        varchar(50) member_type
+        varchar(64) member_ref_id FK
+        varchar(50) member_status
+        datetime joined_at
+        datetime responded_at
+        varchar(50) response_status
+        json response_data
+    }
 ```
 
+**活动类型 (campaign_type):**
+- WEBINAR - 网络研讨会
+- CONFERENCE - 线下会议
+- EXHIBITION - 展会
+- EMAIL_MARKETING - 邮件营销
+- CONTENT_MARKETING - 内容营销
+- PRODUCT_TRIAL - 产品试用
+- SUMMIT - 行业峰会
+
 ---
 
-### 10. Tag（标签）- 核心实体
+### 7. Touchpoint (触点) - 核心实体
 
 ```mermaid
-classDiagram
-    class Tag {
-        +String tag_id PK
-        +String tag_name
-        +String tag_category
-        +String tag_type
-        +String description
-        +String color
-        +DateTime created_at
-        +String created_by_user_id
+erDiagram
+    Touchpoint ||--o{ TouchpointAttachment : "has"
+    
+    Touchpoint {
+        varchar(64) touchpoint_id PK
+        varchar(50) touchpoint_type
+        varchar(64) channel_id FK
+        varchar(64) campaign_id FK
+        varchar(64) contact_id FK
+        varchar(64) lead_id FK
+        varchar(64) account_id FK
+        datetime touchpoint_time
+        varchar(20) touchpoint_direction
+        varchar(50) touchpoint_status
+        varchar(50) content_type
+        varchar(64) content_id FK
+        varchar(200) subject
+        text description
+        int duration_seconds
+        varchar(64) owner_user_id FK
+        json metadata
+        json utm_params
+        datetime created_at
     }
     
-    class TagRelation {
-        +String relation_id PK
-        +String tag_id FK
-        +String entity_type
-        +String entity_id
-        +DateTime tagged_at
-        +String tagged_by_user_id
-        +Boolean is_auto_tagged
-        +String tag_source
+    TouchpointAttachment {
+        varchar(64) attachment_id PK
+        varchar(64) touchpoint_id FK
+        varchar(200) file_name
+        varchar(500) file_url
+        varchar(50) file_type
+        int file_size
+        datetime uploaded_at
     }
-    
-    Tag "1" --> "*" TagRelation
 ```
 
-**标签类型：**
-- 行为标签（高活跃度、近期浏览过产品A）
-- 画像标签（互联网行业、大型企业、决策者）
-- 业务标签（重点客户、流失风险、高价值）
-- 兴趣标签（关注AI、关注云计算）
+**触点类型 (touchpoint_type):**
+- PAGE_VIEW - 网站浏览
+- FORM_SUBMIT - 表单提交
+- DOWNLOAD - 内容下载
+- EMAIL_OPEN - 邮件打开
+- EMAIL_CLICK - 邮件点击
+- CALL - 电话沟通
+- MEETING - 会议拜访
+- CHAT - 在线聊天
+- SOCIAL_INTERACTION - 社交媒体互动
 
 ---
 
-### 11. Segment（客户分群）- 核心实体
+### 8. Event (行为事件) - 核心实体
 
 ```mermaid
-classDiagram
-    class Segment {
-        +String segment_id PK
-        +String segment_name
-        +String segment_type
-        +Text description
-        +JSON segment_rules
-        +String target_entity_type
-        +Integer member_count
-        +Boolean is_dynamic
-        +DateTime last_calculated_at
-        +String created_by_user_id
-        +DateTime created_at
-        +DateTime updated_at
+erDiagram
+    Event {
+        varchar(64) event_id PK
+        varchar(100) event_name
+        varchar(50) event_type
+        varchar(64) channel_id FK
+        varchar(64) contact_id FK
+        varchar(64) lead_id FK
+        varchar(64) account_id FK
+        datetime event_time
+        varchar(64) session_id
+        varchar(50) device_type
+        varchar(50) browser
+        varchar(50) os
+        varchar(50) ip_address
+        varchar(1000) page_url
+        varchar(1000) referrer_url
+        json event_properties
+        json utm_params
+        datetime created_at
     }
-    
-    class SegmentMember {
-        +String member_id PK
-        +String segment_id FK
-        +String entity_type
-        +String entity_id
-        +DateTime joined_at
-        +DateTime left_at
-        +Boolean is_active
-    }
-    
-    Segment "1" --> "*" SegmentMember
 ```
 
----
-
-### 12. Score（评分模型）- 核心实体
-
-```mermaid
-classDiagram
-    class ScoreModel {
-        +String model_id PK
-        +String model_name
-        +String model_type
-        +String target_entity_type
-        +JSON scoring_rules
-        +Integer max_score
-        +String status
-        +DateTime created_at
-        +DateTime updated_at
-    }
-    
-    class ScoreRecord {
-        +String record_id PK
-        +String model_id FK
-        +String entity_type
-        +String entity_id
-        +Integer score
-        +String grade
-        +JSON score_details
-        +DateTime calculated_at
-    }
-    
-    class ScoreHistory {
-        +String history_id PK
-        +String entity_type
-        +String entity_id
-        +String model_id FK
-        +Integer score
-        +DateTime recorded_at
-    }
-    
-    ScoreModel "1" --> "*" ScoreRecord
-```
-
-**评分类型：**
-- Lead评分：基于行为和画像的线索评分
-- Account评分：企业健康度评分
-- Contact评分：联系人参与度评分
+**事件类型 (event_type):**
+- PAGE_VIEW - 页面浏览
+- BUTTON_CLICK - 按钮点击
+- FORM_START - 表单开始
+- FORM_SUBMIT - 表单提交
+- FILE_DOWNLOAD - 文件下载
+- VIDEO_PLAY - 视频播放
+- PRODUCT_TRIAL - 产品试用
+- SEARCH - 搜索行为
 
 ---
 
-### 13. Industry（行业）- 核心实体
+### 9. Product (产品) - 核心实体
 
 ```mermaid
-classDiagram
-    class Industry {
-        +String industry_id PK
-        +String industry_name
-        +String industry_code
-        +String parent_industry_id FK
-        +Integer level
-        +Integer sort_order
-        +DateTime created_at
+erDiagram
+    Product }o--|| ProductCategory : "belongs to"
+    
+    Product {
+        varchar(64) product_id PK
+        varchar(200) product_name
+        varchar(100) product_code UK
+        varchar(64) product_category_id FK
+        varchar(50) product_type
+        varchar(50) product_status
+        text description
+        decimal(18_2) list_price
+        varchar(10) currency
+        varchar(50) pricing_model
+        json feature_list
+        datetime created_at
+        datetime updated_at
+        json custom_fields
+    }
+    
+    ProductCategory {
+        varchar(64) category_id PK
+        varchar(100) category_name
+        varchar(64) parent_category_id FK
+        int level
+        int sort_order
+        datetime created_at
     }
 ```
 
 ---
 
-### 14. Attribution（归因）- 核心实体
+### 10. Tag (标签) - 核心实体
 
 ```mermaid
-classDiagram
-    class Attribution {
-        +String attribution_id PK
-        +String entity_type
-        +String entity_id
-        +String attribution_model
-        +JSON touchpoint_sequence
-        +JSON attribution_weights
-        +DateTime created_at
-        +DateTime updated_at
+erDiagram
+    Tag ||--o{ TagRelation : "applies to"
+    
+    Tag {
+        varchar(64) tag_id PK
+        varchar(100) tag_name UK
+        varchar(50) tag_category
+        varchar(50) tag_type
+        text description
+        varchar(20) color
+        datetime created_at
+        varchar(64) created_by_user_id FK
     }
     
-    class TouchpointAttribution {
-        +String ta_id PK
-        +String attribution_id FK
-        +String touchpoint_id FK
-        +String campaign_id FK
-        +String channel_id FK
-        +Decimal attribution_weight
-        +Integer position_in_journey
-        +DateTime touchpoint_time
+    TagRelation {
+        varchar(64) relation_id PK
+        varchar(64) tag_id FK
+        varchar(50) entity_type
+        varchar(64) entity_id FK
+        datetime tagged_at
+        varchar(64) tagged_by_user_id FK
+        boolean is_auto_tagged
+        varchar(100) tag_source
     }
-    
-    Attribution "1" --> "*" TouchpointAttribution
 ```
 
-**归因模型：**
-- 首次触点归因
-- 末次触点归因
-- 线性归因
-- 时间衰减归因
-- U型归因
-- W型归因
+**标签类型 (tag_type):**
+- BEHAVIOR - 行为标签
+- PROFILE - 画像标签
+- BUSINESS - 业务标签
+- INTEREST - 兴趣标签
 
 ---
 
-### 15. CustomerJourney（客户旅程）- 核心实体
+### 11. Segment (客户分群) - 核心实体
 
 ```mermaid
-classDiagram
-    class CustomerJourney {
-        +String journey_id PK
-        +String journey_name
-        +String entity_type
-        +String entity_id
-        +String journey_stage
-        +DateTime journey_start_at
-        +DateTime journey_end_at
-        +Integer total_touchpoints
-        +Integer journey_duration_days
-        +JSON stage_history
-        +DateTime created_at
-        +DateTime updated_at
+erDiagram
+    Segment ||--o{ SegmentMember : "contains"
+    
+    Segment {
+        varchar(64) segment_id PK
+        varchar(200) segment_name
+        varchar(50) segment_type
+        text description
+        json segment_rules
+        varchar(50) target_entity_type
+        int member_count
+        boolean is_dynamic
+        datetime last_calculated_at
+        varchar(64) created_by_user_id FK
+        datetime created_at
+        datetime updated_at
     }
     
-    class JourneyStage {
-        +String stage_id PK
-        +String stage_name
-        +Integer stage_order
-        +String stage_category
-        +JSON milestone_criteria
+    SegmentMember {
+        varchar(64) member_id PK
+        varchar(64) segment_id FK
+        varchar(50) entity_type
+        varchar(64) entity_id FK
+        datetime joined_at
+        datetime left_at
+        boolean is_active
+    }
+```
+
+---
+
+### 12. Score (评分模型) - 核心实体
+
+```mermaid
+erDiagram
+    ScoreModel ||--o{ ScoreRecord : "generates"
+    ScoreRecord ||--o{ ScoreHistory : "tracks"
+    
+    ScoreModel {
+        varchar(64) model_id PK
+        varchar(100) model_name
+        varchar(50) model_type
+        varchar(50) target_entity_type
+        json scoring_rules
+        int max_score
+        varchar(50) status
+        datetime created_at
+        datetime updated_at
+    }
+    
+    ScoreRecord {
+        varchar(64) record_id PK
+        varchar(64) model_id FK
+        varchar(50) entity_type
+        varchar(64) entity_id FK
+        int score
+        varchar(10) grade
+        json score_details
+        datetime calculated_at
+        datetime updated_at
+    }
+    
+    ScoreHistory {
+        varchar(64) history_id PK
+        varchar(50) entity_type
+        varchar(64) entity_id FK
+        varchar(64) model_id FK
+        int score
+        datetime recorded_at
+    }
+```
+
+**评分类型 (model_type):**
+- LEAD_SCORING - 线索评分
+- ACCOUNT_HEALTH - 企业健康度评分
+- CONTACT_ENGAGEMENT - 联系人参与度评分
+
+---
+
+### 13. Industry (行业) - 核心实体
+
+```mermaid
+erDiagram
+    Industry ||--o{ Industry : "parent of"
+    
+    Industry {
+        varchar(64) industry_id PK
+        varchar(100) industry_name
+        varchar(50) industry_code UK
+        varchar(64) parent_industry_id FK
+        int level
+        int sort_order
+        datetime created_at
+    }
+```
+
+---
+
+### 14. Attribution (归因) - 核心实体
+
+```mermaid
+erDiagram
+    Attribution ||--o{ TouchpointAttribution : "analyzes"
+    
+    Attribution {
+        varchar(64) attribution_id PK
+        varchar(50) entity_type
+        varchar(64) entity_id FK
+        varchar(50) attribution_model
+        json touchpoint_sequence
+        json attribution_weights
+        datetime created_at
+        datetime updated_at
+    }
+    
+    TouchpointAttribution {
+        varchar(64) ta_id PK
+        varchar(64) attribution_id FK
+        varchar(64) touchpoint_id FK
+        varchar(64) campaign_id FK
+        varchar(64) channel_id FK
+        decimal(5_4) attribution_weight
+        int position_in_journey
+        datetime touchpoint_time
+    }
+```
+
+**归因模型 (attribution_model):**
+- FIRST_TOUCH - 首次触点归因
+- LAST_TOUCH - 末次触点归因
+- LINEAR - 线性归因
+- TIME_DECAY - 时间衰减归因
+- U_SHAPED - U型归因
+- W_SHAPED - W型归因
+
+---
+
+### 15. CustomerJourney (客户旅程) - 核心实体
+
+```mermaid
+erDiagram
+    CustomerJourney ||--o{ JourneyStage : "follows"
+    
+    CustomerJourney {
+        varchar(64) journey_id PK
+        varchar(200) journey_name
+        varchar(50) entity_type
+        varchar(64) entity_id FK
+        varchar(50) journey_stage
+        datetime journey_start_at
+        datetime journey_end_at
+        int total_touchpoints
+        int journey_duration_days
+        json stage_history
+        datetime created_at
+        datetime updated_at
+    }
+    
+    JourneyStage {
+        varchar(64) stage_id PK
+        varchar(100) stage_name
+        int stage_order
+        varchar(50) stage_category
+        json milestone_criteria
+        datetime created_at
     }
 ```
 
@@ -771,86 +877,118 @@ classDiagram
 
 ```mermaid
 erDiagram
-    Account ||--o{ AccountContactRelation : has
-    Contact ||--o{ AccountContactRelation : belongs
-    Account ||--o{ Opportunity : has
-    Contact ||--o{ Opportunity : has
-    Lead ||--o| Contact : converts_to
-    Lead ||--o| Account : converts_to
-    Lead ||--o| Opportunity : converts_to
+    Account ||--o{ AccountContactRelation : "has"
+    Account ||--|| AccountSummary : "aggregates"
+    Account ||--o{ Opportunity : "owns"
+    Account ||--o{ Touchpoint : "receives"
+    Account ||--o{ AccountChannelIdentity : "identifies in"
     
-    Channel ||--o{ Touchpoint : generates
-    Campaign ||--o{ Touchpoint : generates
-    Contact ||--o{ Touchpoint : receives
-    Lead ||--o{ Touchpoint : receives
-    Account ||--o{ Touchpoint : receives
+    Contact ||--o{ AccountContactRelation : "belongs to"
+    Contact ||--|| ContactSummary : "aggregates"
+    Contact ||--o{ Opportunity : "participates"
+    Contact ||--o{ Touchpoint : "receives"
+    Contact ||--o{ Event : "generates"
+    Contact ||--o{ ContactChannelIdentity : "identifies in"
     
-    Contact ||--o{ Event : generates
-    Lead ||--o{ Event : generates
-    Channel ||--o{ Event : tracks
+    Lead ||--o| Contact : "converts to"
+    Lead ||--o| Account : "converts to"
+    Lead ||--o| Opportunity : "converts to"
+    Lead ||--|| LeadSummary : "aggregates"
+    Lead ||--o{ Touchpoint : "receives"
+    Lead ||--o{ Event : "generates"
+    Lead ||--o{ LeadChannelIdentity : "identifies in"
     
-    Opportunity ||--o{ OpportunityProduct : contains
-    Product ||--o{ OpportunityProduct : included_in
+    Opportunity ||--o{ OpportunityStageHistory : "tracks"
+    Opportunity ||--o{ OpportunityProduct : "contains"
     
-    Campaign ||--o{ Lead : generates
-    Campaign ||--o{ CampaignMember : has
+    Product ||--o{ OpportunityProduct : "included in"
+    Product }o--|| ProductCategory : "categorized by"
     
-    Account ||--o{ AccountChannelIdentity : has
-    Contact ||--o{ ContactChannelIdentity : has
-    Lead ||--o{ LeadChannelIdentity : has
-    Channel ||--o{ AccountChannelIdentity : identifies
-    Channel ||--o{ ContactChannelIdentity : identifies
-    Channel ||--o{ LeadChannelIdentity : identifies
+    Channel ||--o{ Touchpoint : "generates"
+    Channel ||--o{ Event : "tracks"
+    Channel ||--o{ ChannelPerformance : "measures"
+    Channel ||--o{ AccountChannelIdentity : "identifies"
+    Channel ||--o{ ContactChannelIdentity : "identifies"
+    Channel ||--o{ LeadChannelIdentity : "identifies"
     
-    Tag ||--o{ TagRelation : applies_to
-    Segment ||--o{ SegmentMember : contains
+    Campaign ||--o{ Touchpoint : "drives"
+    Campaign ||--o{ Lead : "generates"
+    Campaign ||--o{ CampaignMember : "includes"
+    Campaign ||--o{ CampaignPerformance : "measures"
     
-    ScoreModel ||--o{ ScoreRecord : calculates
+    Tag ||--o{ TagRelation : "tags"
+    Segment ||--o{ SegmentMember : "groups"
     
-    Industry ||--o{ Account : categorizes
-    Industry ||--o{ Lead : categorizes
+    ScoreModel ||--o{ ScoreRecord : "scores"
+    ScoreRecord ||--o{ ScoreHistory : "history"
     
-    Attribution ||--o{ TouchpointAttribution : analyzes
-    Touchpoint ||--o{ TouchpointAttribution : contributes_to
-    Campaign ||--o{ TouchpointAttribution : contributes_to
+    Industry ||--o{ Account : "classifies"
+    Industry ||--o{ Lead : "classifies"
+    Industry ||--o{ Industry : "parent of"
     
-    CustomerJourney ||--o{ Touchpoint : tracks
+    Attribution ||--o{ TouchpointAttribution : "attributes"
+    Touchpoint ||--o{ TouchpointAttribution : "contributes"
+    
+    CustomerJourney ||--o{ JourneyStage : "progresses"
 ```
 
 ---
 
-### 全渠道身份关联图
+### 全渠道身份统一架构
 
 ```mermaid
 graph TB
-    subgraph "渠道身份体系"
-        WX[微信渠道身份]
-        WEB[官网渠道身份]
-        DY[抖音渠道身份]
-        EMAIL[邮件渠道身份]
-        PHONE[电话渠道身份]
-        OFFLINE[线下活动身份]
+    subgraph Sources["多渠道数据源"]
+        direction TB
+        S1["微信公众号<br/>WeChat Official"]
+        S2["企业微信<br/>Enterprise WeChat"]
+        S3["官方网站<br/>Website"]
+        S4["抖音账号<br/>Douyin"]
+        S5["邮件系统<br/>Email"]
+        S6["电话系统<br/>Phone"]
+        S7["线下活动<br/>Offline Event"]
     end
     
-    subgraph "统一Contact"
-        Contact[Contact 联系人<br/>统一ID: C001]
+    subgraph Identity["身份识别中心 Identity Resolution"]
+        direction TB
+        IR["Identity Resolution Engine<br/>身份识别引擎"]
+        IM["Identity Matching<br/>身份匹配"]
+        IG["Identity Grouping<br/>身份聚合"]
     end
     
-    subgraph "统一Account"
-        Account[Account 企业<br/>统一ID: A001]
+    subgraph Entities["统一客户实体 Unified Entities"]
+        direction TB
+        UC["Contact<br/>统一联系人<br/>ID: CNT_001"]
+        UA["Account<br/>统一企业<br/>ID: ACC_001"]
     end
     
-    WX --> |Identity Mapping| Contact
-    WEB --> |Identity Mapping| Contact
-    DY --> |Identity Mapping| Contact
-    EMAIL --> |Identity Mapping| Contact
-    PHONE --> |Identity Mapping| Contact
-    OFFLINE --> |Identity Mapping| Contact
+    subgraph Mapping["渠道身份映射 Channel Identity Mapping"]
+        direction TB
+        CI1["ContactChannelIdentity<br/>微信OpenID"]
+        CI2["ContactChannelIdentity<br/>企业微信UserID"]
+        CI3["ContactChannelIdentity<br/>网站CookieID"]
+        CI4["ContactChannelIdentity<br/>抖音UserID"]
+        AI1["AccountChannelIdentity<br/>企业微信CorpID"]
+        AI2["AccountChannelIdentity<br/>官网企业ID"]
+    end
     
-    Contact --> |Belongs To| Account
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 --> IR
+    IR --> IM
+    IM --> IG
+    IG --> UC
+    IG --> UA
+    UC --> CI1 & CI2 & CI3 & CI4
+    UA --> AI1 & AI2
     
-    style Contact fill:#ff9999
-    style Account fill:#99ccff
+    classDef sourceClass fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef identityClass fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef entityClass fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef mappingClass fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    
+    class S1,S2,S3,S4,S5,S6,S7 sourceClass
+    class IR,IM,IG identityClass
+    class UC,UA entityClass
+    class CI1,CI2,CI3,CI4,AI1,AI2 mappingClass
 ```
 
 ---
@@ -861,22 +999,34 @@ graph TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NewLead: 捕获线索
-    NewLead --> Contacted: 首次联系
-    Contacted --> Qualified: 资格验证
-    Qualified --> Converted: 转化
+    [*] --> NewLead: 捕获线索<br/>Lead Capture
     
-    Converted --> Contact: 创建联系人
-    Converted --> Account: 创建/关联企业
-    Converted --> Opportunity: 创建商机
+    state "新线索 New Lead" as NewLead
+    state "已联系 Contacted" as Contacted
+    state "已限定 Qualified" as Qualified
+    state "已转化 Converted" as Converted
+    state "无效线索 Invalid" as Invalid
     
-    Contact --> [*]
-    Account --> [*]
-    Opportunity --> [*]
+    NewLead --> Contacted: 首次联系<br/>First Contact
+    NewLead --> Invalid: 标记无效<br/>Mark Invalid
     
-    NewLead --> Invalid: 标记无效
-    Contacted --> Invalid: 标记无效
-    Invalid --> [*]
+    Contacted --> Qualified: 资格验证<br/>Qualification
+    Contacted --> Invalid: 标记无效<br/>Mark Invalid
+    
+    Qualified --> Converted: 转化<br/>Convert
+    
+    state Converted {
+        [*] --> CreateContact: 创建联系人<br/>Create Contact
+        [*] --> CreateAccount: 创建/关联企业<br/>Create/Link Account
+        [*] --> CreateOpportunity: 创建商机<br/>Create Opportunity
+        
+        CreateContact --> [*]
+        CreateAccount --> [*]
+        CreateOpportunity --> [*]
+    }
+    
+    Converted --> [*]: 完成<br/>Complete
+    Invalid --> [*]: 结束<br/>End
 ```
 
 ---
@@ -885,43 +1035,79 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Lead: 线索阶段
-    Lead --> Qualification: 需求确认
-    Qualification --> SolutionDesign: 方案设计
-    SolutionDesign --> Negotiation: 商务谈判
-    Negotiation --> Contract: 合同签订
-    Contract --> Won: 赢单
-    Contract --> Lost: 输单
+    [*] --> Lead: 线索阶段<br/>Lead Stage
     
-    Lead --> Lost: 丢失
-    Qualification --> Lost: 丢失
-    SolutionDesign --> Lost: 丢失
-    Negotiation --> Lost: 丢失
+    state "线索阶段 Lead" as Lead
+    state "需求确认 Qualification" as Qualification
+    state "方案设计 Solution Design" as SolutionDesign
+    state "商务谈判 Negotiation" as Negotiation
+    state "合同签订 Contract" as Contract
+    state "赢单 Won" as Won
+    state "输单 Lost" as Lost
     
-    Won --> [*]
-    Lost --> [*]
+    Lead --> Qualification: 需求分析<br/>Needs Analysis
+    Lead --> Lost: 丢失<br/>Lost
+    
+    Qualification --> SolutionDesign: 方案输出<br/>Solution Output
+    Qualification --> Lost: 丢失<br/>Lost
+    
+    SolutionDesign --> Negotiation: 商务谈判<br/>Negotiation Start
+    SolutionDesign --> Lost: 丢失<br/>Lost
+    
+    Negotiation --> Contract: 签订合同<br/>Sign Contract
+    Negotiation --> Lost: 丢失<br/>Lost
+    
+    Contract --> Won: 成功赢单<br/>Close Won
+    Contract --> Lost: 失败输单<br/>Close Lost
+    
+    Won --> [*]: 完成<br/>Complete
+    Lost --> [*]: 结束<br/>End
+    
+    note right of Won
+        更新AccountSummary
+        Update Account Summary
+    end note
 ```
 
 ---
 
-### 客户生命周期流程
+### 客户生命周期管理
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Awareness: 认知阶段
-    Awareness --> Consideration: 考虑阶段
-    Consideration --> Decision: 决策阶段
-    Decision --> Retention: 留存阶段
-    Retention --> Expansion: 扩展阶段
+    [*] --> Awareness: 认知阶段<br/>Awareness
     
-    Retention --> Churn: 流失
-    Expansion --> Churn: 流失
+    state "认知阶段 Awareness" as Awareness
+    state "考虑阶段 Consideration" as Consideration
+    state "决策阶段 Decision" as Decision
+    state "留存阶段 Retention" as Retention
+    state "扩展阶段 Expansion" as Expansion
+    state "流失 Churn" as Churn
+    state "召回 Winback" as Winback
     
-    Churn --> Winback: 召回
-    Winback --> Retention: 成功召回
-    Winback --> [*]: 永久流失
+    Awareness --> Consideration: 产生兴趣<br/>Show Interest
+    Consideration --> Decision: 深度评估<br/>Deep Evaluation
+    Decision --> Retention: 成交购买<br/>Purchase
+    Retention --> Expansion: 追加购买<br/>Upsell/Cross-sell
     
-    Expansion --> [*]: 持续合作
+    Retention --> Churn: 停止使用<br/>Stop Using
+    Expansion --> Churn: 停止使用<br/>Stop Using
+    
+    Churn --> Winback: 召回营销<br/>Winback Campaign
+    Winback --> Retention: 成功召回<br/>Successfully Winback
+    Winback --> [*]: 永久流失<br/>Permanent Loss
+    
+    Expansion --> [*]: 持续合作<br/>Ongoing Partnership
+    
+    note right of Retention
+        health_score > 70
+        健康客户
+    end note
+    
+    note right of Churn
+        health_score < 30
+        预警流失
+    end note
 ```
 
 ---
@@ -930,30 +1116,36 @@ stateDiagram-v2
 
 ```mermaid
 sequenceDiagram
-    participant User as 用户
-    participant Channel as 渠道
-    participant Event as 事件系统
-    participant Identity as 身份识别
-    participant CDP as CDP核心
-    participant Lead as Lead管理
-    participant Contact as Contact管理
-    participant Account as Account管理
+    actor User as 用户<br/>User
+    participant CH as 渠道<br/>Channel
+    participant EV as 事件系统<br/>Event System
+    participant ID as 身份识别<br/>Identity Resolution
+    participant CDP as CDP核心<br/>CDP Core
+    participant LD as Lead管理<br/>Lead Management
+    participant CT as Contact管理<br/>Contact Management
+    participant AC as Account管理<br/>Account Management
+    participant SM as 汇总计算<br/>Summary Calculation
     
-    User->>Channel: 1. 访问/互动
-    Channel->>Event: 2. 记录事件
-    Event->>Identity: 3. 身份识别
+    User->>CH: 1. 访问互动<br/>Visit/Interact
+    CH->>EV: 2. 记录事件<br/>Log Event
+    EV->>ID: 3. 身份识别<br/>Identify
     
-    alt 新用户
-        Identity->>Lead: 4a. 创建Lead
-        Lead->>CDP: 5a. 保存Lead数据
-    else 已识别用户
-        Identity->>Contact: 4b. 关联Contact
-        Contact->>Account: 5b. 关联Account
+    alt 新用户 New User
+        ID->>LD: 4a. 创建Lead<br/>Create Lead
+        LD->>CDP: 5a. 保存数据<br/>Save Data
+        CDP->>SM: 6a. 更新LeadSummary<br/>Update Summary
+    else 已识别用户 Identified User
+        ID->>CT: 4b. 关联Contact<br/>Link Contact
+        CT->>AC: 5b. 关联Account<br/>Link Account
+        AC->>CDP: 6b. 保存数据<br/>Save Data
+        CDP->>SM: 7b. 更新Summary<br/>Update Summary
     end
     
-    CDP->>Event: 6. 触发规则引擎
-    Event->>Channel: 7. 个性化响应
-    Channel->>User: 8. 返回内容
+    SM->>CDP: 8. 触发规则引擎<br/>Trigger Rules
+    CDP->>CH: 9. 个性化响应<br/>Personalized Response
+    CH->>User: 10. 返回内容<br/>Return Content
+    
+    Note over SM: ContactSummary<br/>AccountSummary<br/>LeadSummary
 ```
 
 ---
@@ -962,392 +1154,598 @@ sequenceDiagram
 
 ### Account 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| account_id | VARCHAR | 64 | ✓ | 账户唯一ID（PK） | ACC_20231105001 |
-| account_name | VARCHAR | 200 | ✓ | 企业名称 | 阿里巴巴网络技术有限公司 |
-| unified_social_credit_code | VARCHAR | 18 |  | 统一社会信用代码 | 91330000MA27XYZ123 |
-| account_type | VARCHAR | 50 | ✓ | 客户类型 | CUSTOMER（客户）/PARTNER（合作伙伴）/COMPETITOR（竞争对手）/PROSPECT（潜在客户） |
-| industry_id | VARCHAR | 64 |  | 行业ID（FK） | IND_001 |
-| account_status | VARCHAR | 50 | ✓ | 账户状态 | ACTIVE（活跃）/DORMANT（休眠）/CHURNED（流失）/BLACKLIST（黑名单） |
-| account_level | VARCHAR | 50 |  | 客户等级 | STRATEGIC（战略级）/IMPORTANT（重要级）/NORMAL（普通级） |
-| annual_revenue | DECIMAL | (18,2) |  | 年营收（万元） | 50000.00 |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| account_id | VARCHAR | 64 | PK, NOT NULL | 账户唯一标识 | ACC_20231105001 |
+| account_name | VARCHAR | 200 | NOT NULL | 企业名称 | 阿里巴巴网络技术有限公司 |
+| unified_social_credit_code | VARCHAR | 18 | UNIQUE | 统一社会信用代码 | 91330000MA27XYZ123 |
+| account_type | VARCHAR | 50 | NOT NULL | 客户类型 | CUSTOMER / PARTNER / COMPETITOR / PROSPECT |
+| industry_id | VARCHAR | 64 | FK | 行业分类外键 | IND_001 |
+| account_status | VARCHAR | 50 | NOT NULL | 账户状态 | ACTIVE / DORMANT / CHURNED / BLACKLIST |
+| account_level | VARCHAR | 50 |  | 客户等级 | STRATEGIC / IMPORTANT / NORMAL |
+| annual_revenue | DECIMAL | 18,2 |  | 年营收(万元) | 50000.00 |
 | employee_count | INT |  |  | 员工人数 | 5000 |
 | company_website | VARCHAR | 500 |  | 公司网站 | https://www.alibaba.com |
 | company_address | VARCHAR | 500 |  | 公司地址 | 浙江省杭州市余杭区文一西路969号 |
 | province | VARCHAR | 50 |  | 省份 | 浙江省 |
 | city | VARCHAR | 50 |  | 城市 | 杭州市 |
 | district | VARCHAR | 50 |  | 区县 | 余杭区 |
-| account_source | VARCHAR | 100 |  | 来源 | WEBSITE/EXHIBITION/PARTNER/COLD_CALL |
-| primary_channel_id | VARCHAR | 64 |  | 主渠道ID（FK） | CH_001 |
-| owner_user_id | VARCHAR | 64 |  | 负责人ID | USER_001 |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 10:30:00 |
-| updated_at | DATETIME |  | ✓ | 更新时间 | 2023-11-05 10:30:00 |
-| custom_fields | JSON |  |  | 自定义字段 | {"crm_id": "CRM001"} |
-| tags | JSON |  |  | 标签数组 | ["高价值客户","AI行业"] |
-| health_score | INT |  |  | 健康度评分（0-100） | 85 |
-| lifecycle_stage | VARCHAR | 50 |  | 生命周期阶段 | AWARENESS/CONSIDERATION/DECISION/RETENTION/EXPANSION |
+| account_source | VARCHAR | 100 |  | 来源渠道 | WEBSITE / EXHIBITION / PARTNER / COLD_CALL |
+| primary_channel_id | VARCHAR | 64 | FK | 主渠道ID | CH_001 |
+| owner_user_id | VARCHAR | 64 | FK | 负责人ID | USER_001 |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 10:30:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 15:20:00 |
+| custom_fields | JSON |  |  | 自定义扩展字段 | {"crm_id": "CRM001", "region": "east"} |
+| lifecycle_stage | VARCHAR | 50 |  | 生命周期阶段 | AWARENESS / CONSIDERATION / DECISION / RETENTION / EXPANSION |
+
+---
+
+### AccountSummary 详细字段设计
+
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| summary_id | VARCHAR | 64 | PK, NOT NULL | 汇总记录唯一标识 | ACCS_20231105001 |
+| account_id | VARCHAR | 64 | FK, UNIQUE, NOT NULL | 账户ID | ACC_20231105001 |
+| total_contacts | INT |  | DEFAULT 0 | 关联联系人总数 | 25 |
+| total_opportunities | INT |  | DEFAULT 0 | 商机总数 | 8 |
+| total_leads | INT |  | DEFAULT 0 | 线索总数 | 45 |
+| total_revenue | DECIMAL | 18,2 | DEFAULT 0 | 累计收入(元) | 5000000.00 |
+| lifetime_value | DECIMAL | 18,2 | DEFAULT 0 | 生命周期价值(元) | 8000000.00 |
+| won_opportunities | INT |  | DEFAULT 0 | 赢单数量 | 5 |
+| lost_opportunities | INT |  | DEFAULT 0 | 输单数量 | 2 |
+| win_rate | DECIMAL | 5,2 | DEFAULT 0 | 赢单率(%) | 71.43 |
+| total_touchpoints | INT |  | DEFAULT 0 | 总触点数 | 156 |
+| active_campaigns | INT |  | DEFAULT 0 | 活跃营销活动数 | 3 |
+| health_score | INT |  | DEFAULT 0 | 健康度评分(0-100) | 85 |
+| last_activity_at | DATETIME |  |  | 最后活跃时间 | 2023-11-05 14:30:00 |
+| last_purchase_at | DATETIME |  |  | 最后购买时间 | 2023-10-15 09:00:00 |
+| first_purchase_date | DATE |  |  | 首次购买日期 | 2022-03-20 |
+| latest_opportunity_date | DATE |  |  | 最新商机日期 | 2023-11-01 |
+| days_since_last_contact | INT |  | DEFAULT 0 | 距上次联系天数 | 5 |
+| calculated_at | DATETIME |  | NOT NULL | 计算时间 | 2023-11-05 16:00:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 16:00:00 |
+
+**AccountSummary 设计说明:**
+1. 该表用于存储Account的所有汇总统计数据，避免频繁实时计算
+2. 建议通过定时任务(如每小时)或触发器更新
+3. 用于快速查询和展示客户360度视图
+4. 支持客户健康度监控和预警
 
 ---
 
 ### Contact 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| contact_id | VARCHAR | 64 | ✓ | 联系人唯一ID（PK） | CNT_20231105001 |
-| contact_name | VARCHAR | 100 | ✓ | 联系人姓名 | 张伟 |
-| mobile_phone | VARCHAR | 20 |  | 手机号 | 13800138000 |
-| email | VARCHAR | 200 |  | 邮箱 | zhangwei@company.com |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| contact_id | VARCHAR | 64 | PK, NOT NULL | 联系人唯一标识 | CNT_20231105001 |
+| contact_name | VARCHAR | 100 | NOT NULL | 联系人姓名 | 张伟 |
+| mobile_phone | VARCHAR | 20 | UNIQUE | 手机号 | 13800138000 |
+| email | VARCHAR | 200 | UNIQUE | 邮箱地址 | zhangwei@company.com |
 | wechat_id | VARCHAR | 100 |  | 微信ID | wx_zhangwei |
-| job_title | VARCHAR | 100 |  | 职位 | CTO |
+| job_title | VARCHAR | 100 |  | 职位 | 首席技术官 CTO |
 | department | VARCHAR | 100 |  | 部门 | 技术部 |
-| contact_status | VARCHAR | 50 | ✓ | 联系人状态 | ACTIVE（活跃）/INACTIVE（不活跃）/BOUNCED（退订）/UNSUBSCRIBED（取消订阅） |
-| primary_account_id | VARCHAR | 64 |  | 主要关联企业ID（FK） | ACC_20231105001 |
-| contact_source | VARCHAR | 100 |  | 来源 | WEBSITE/FORM/IMPORT/API |
-| primary_channel_id | VARCHAR | 64 |  | 主渠道ID（FK） | CH_001 |
-| owner_user_id | VARCHAR | 64 |  | 负责人ID | USER_001 |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 10:30:00 |
-| updated_at | DATETIME |  | ✓ | 更新时间 | 2023-11-05 10:30:00 |
-| custom_fields | JSON |  |  | 自定义字段 | {"birthday": "1985-01-01"} |
-| tags | JSON |  |  | 标签数组 | ["决策者","技术背景"] |
-| engagement_score | INT |  |  | 参与度评分（0-100） | 75 |
-| lifecycle_stage | VARCHAR | 50 |  | 生命周期阶段 | SUBSCRIBER/LEAD/MQL/SQL/OPPORTUNITY/CUSTOMER |
-| is_decision_maker | BOOLEAN |  |  | 是否决策者 | true |
-| is_verified | BOOLEAN |  |  | 是否已验证 | true |
+| contact_status | VARCHAR | 50 | NOT NULL | 联系人状态 | ACTIVE / INACTIVE / BOUNCED / UNSUBSCRIBED |
+| primary_account_id | VARCHAR | 64 | FK | 主要关联企业ID | ACC_20231105001 |
+| contact_source | VARCHAR | 100 |  | 来源 | WEBSITE / FORM / IMPORT / API / REFERRAL |
+| primary_channel_id | VARCHAR | 64 | FK | 主渠道ID | CH_001 |
+| owner_user_id | VARCHAR | 64 | FK | 负责人ID | USER_001 |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 10:30:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 15:20:00 |
+| custom_fields | JSON |  |  | 自定义字段 | {"birthday": "1985-01-01", "hobby": "reading"} |
+| lifecycle_stage | VARCHAR | 50 |  | 生命周期阶段 | SUBSCRIBER / LEAD / MQL / SQL / OPPORTUNITY / CUSTOMER |
+| is_decision_maker | BOOLEAN |  | DEFAULT FALSE | 是否决策者 | true |
+| is_verified | BOOLEAN |  | DEFAULT FALSE | 是否已验证 | true |
+
+---
+
+### ContactSummary 详细字段设计
+
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| summary_id | VARCHAR | 64 | PK, NOT NULL | 汇总记录唯一标识 | CNTS_20231105001 |
+| contact_id | VARCHAR | 64 | FK, UNIQUE, NOT NULL | 联系人ID | CNT_20231105001 |
+| total_touchpoints | INT |  | DEFAULT 0 | 总触点数 | 87 |
+| total_events | INT |  | DEFAULT 0 | 总事件数 | 234 |
+| email_opens | INT |  | DEFAULT 0 | 邮件打开次数 | 45 |
+| email_clicks | INT |  | DEFAULT 0 | 邮件点击次数 | 23 |
+| form_submissions | INT |  | DEFAULT 0 | 表单提交次数 | 12 |
+| content_downloads | INT |  | DEFAULT 0 | 内容下载次数 | 8 |
+| engagement_score | INT |  | DEFAULT 0 | 参与度评分(0-100) | 78 |
+| last_activity_at | DATETIME |  |  | 最后活跃时间 | 2023-11-05 14:30:00 |
+| last_email_sent_at | DATETIME |  |  | 最后邮件发送时间 | 2023-11-04 10:00:00 |
+| last_email_opened_at | DATETIME |  |  | 最后邮件打开时间 | 2023-11-04 15:30:00 |
+| days_since_last_activity | INT |  | DEFAULT 0 | 距上次活跃天数 | 1 |
+| campaign_responses | INT |  | DEFAULT 0 | 营销活动响应次数 | 5 |
+| calculated_at | DATETIME |  | NOT NULL | 计算时间 | 2023-11-05 16:00:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 16:00:00 |
 
 ---
 
 ### Lead 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| lead_id | VARCHAR | 64 | ✓ | 线索唯一ID（PK） | LEAD_20231105001 |
-| lead_name | VARCHAR | 100 | ✓ | 线索姓名 | 李明 |
-| company_name | VARCHAR | 200 |  | 公司名称 | XX科技有限公司 |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| lead_id | VARCHAR | 64 | PK, NOT NULL | 线索唯一标识 | LEAD_20231105001 |
+| lead_name | VARCHAR | 100 | NOT NULL | 线索姓名 | 李明 |
+| company_name | VARCHAR | 200 |  | 公司名称 | 腾讯科技有限公司 |
 | mobile_phone | VARCHAR | 20 |  | 手机号 | 13900139000 |
-| email | VARCHAR | 200 |  | 邮箱 | liming@company.com |
+| email | VARCHAR | 200 |  | 邮箱地址 | liming@company.com |
 | wechat_id | VARCHAR | 100 |  | 微信ID | wx_liming |
 | job_title | VARCHAR | 100 |  | 职位 | 产品经理 |
-| lead_source | VARCHAR | 100 | ✓ | 线索来源 | WEBSITE/FORM/CAMPAIGN/COLD_CALL/REFERRAL |
-| channel_id | VARCHAR | 64 |  | 渠道ID（FK） | CH_001 |
-| campaign_id | VARCHAR | 64 |  | 营销活动ID（FK） | CMP_001 |
-| lead_status | VARCHAR | 50 | ✓ | 线索状态 | NEW（新建）/CONTACTED（已联系）/QUALIFIED（已限定）/CONVERTED（已转化）/DISQUALIFIED（无效） |
-| lead_score | INT |  |  | 线索评分（0-100） | 80 |
-| lead_grade | VARCHAR | 10 |  | 线索等级 | A/B/C/D |
-| industry_id | VARCHAR | 64 |  | 行业ID（FK） | IND_001 |
+| lead_source | VARCHAR | 100 | NOT NULL | 线索来源 | WEBSITE / FORM / CAMPAIGN / COLD_CALL / REFERRAL |
+| channel_id | VARCHAR | 64 | FK | 渠道ID | CH_001 |
+| campaign_id | VARCHAR | 64 | FK | 营销活动ID | CMP_001 |
+| lead_status | VARCHAR | 50 | NOT NULL | 线索状态 | NEW / CONTACTED / QUALIFIED / CONVERTED / DISQUALIFIED |
+| lead_score | INT |  | DEFAULT 0 | 线索评分(0-100) | 80 |
+| lead_grade | VARCHAR | 10 |  | 线索等级 | A / B / C / D |
+| industry_id | VARCHAR | 64 | FK | 行业ID | IND_001 |
 | province | VARCHAR | 50 |  | 省份 | 广东省 |
 | city | VARCHAR | 50 |  | 城市 | 深圳市 |
-| owner_user_id | VARCHAR | 64 |  | 负责人ID | USER_001 |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 10:30:00 |
-| updated_at | DATETIME |  | ✓ | 更新时间 | 2023-11-05 10:30:00 |
+| owner_user_id | VARCHAR | 64 | FK | 负责人ID | USER_001 |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 10:30:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 15:20:00 |
 | last_contacted_at | DATETIME |  |  | 最后联系时间 | 2023-11-05 14:00:00 |
 | converted_at | DATETIME |  |  | 转化时间 | 2023-11-10 09:00:00 |
-| converted_contact_id | VARCHAR | 64 |  | 转化后联系人ID（FK） | CNT_20231110001 |
-| converted_account_id | VARCHAR | 64 |  | 转化后企业ID（FK） | ACC_20231110001 |
-| converted_opportunity_id | VARCHAR | 64 |  | 转化后商机ID（FK） | OPP_20231110001 |
-| custom_fields | JSON |  |  | 自定义字段 | {"product_interest": "AI"} |
-| tags | JSON |  |  | 标签数组 | ["高意向","下载过白皮书"] |
-| is_qualified | BOOLEAN |  |  | 是否为合格线索 | true |
+| converted_contact_id | VARCHAR | 64 | FK | 转化后联系人ID | CNT_20231110001 |
+| converted_account_id | VARCHAR | 64 | FK | 转化后企业ID | ACC_20231110001 |
+| converted_opportunity_id | VARCHAR | 64 | FK | 转化后商机ID | OPP_20231110001 |
+| custom_fields | JSON |  |  | 自定义字段 | {"product_interest": "AI", "budget": "100K"} |
+| is_qualified | BOOLEAN |  | DEFAULT FALSE | 是否为合格线索 | true |
+
+---
+
+### LeadSummary 详细字段设计
+
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| summary_id | VARCHAR | 64 | PK, NOT NULL | 汇总记录唯一标识 | LEADS_20231105001 |
+| lead_id | VARCHAR | 64 | FK, UNIQUE, NOT NULL | 线索ID | LEAD_20231105001 |
+| total_touchpoints | INT |  | DEFAULT 0 | 总触点数 | 12 |
+| total_events | INT |  | DEFAULT 0 | 总事件数 | 45 |
+| form_submissions | INT |  | DEFAULT 0 | 表单提交次数 | 3 |
+| content_downloads | INT |  | DEFAULT 0 | 内容下载次数 | 2 |
+| page_views | INT |  | DEFAULT 0 | 页面浏览次数 | 28 |
+| days_in_pipeline | INT |  | DEFAULT 0 | 在管道中天数 | 7 |
+| contact_attempts | INT |  | DEFAULT 0 | 联系尝试次数 | 4 |
+| last_activity_at | DATETIME |  |  | 最后活跃时间 | 2023-11-05 14:30:00 |
+| last_contact_attempt_at | DATETIME |  |  | 最后联系尝试时间 | 2023-11-05 11:00:00 |
+| calculated_at | DATETIME |  | NOT NULL | 计算时间 | 2023-11-05 16:00:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 16:00:00 |
 
 ---
 
 ### Opportunity 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| opportunity_id | VARCHAR | 64 | ✓ | 商机唯一ID（PK） | OPP_20231105001 |
-| opportunity_name | VARCHAR | 200 | ✓ | 商机名称 | XX公司-AI平台采购项目 |
-| account_id | VARCHAR | 64 | ✓ | 关联企业ID（FK） | ACC_20231105001 |
-| primary_contact_id | VARCHAR | 64 |  | 主要联系人ID（FK） | CNT_20231105001 |
-| lead_id | VARCHAR | 64 |  | 来源线索ID（FK） | LEAD_20231105001 |
-| opportunity_type | VARCHAR | 50 |  | 商机类型 | NEW_BUSINESS（新客户）/UPSELL（追加销售）/RENEWAL（续约）/CROSS_SELL（交叉销售） |
-| opportunity_source | VARCHAR | 100 |  | 商机来源 | LEAD_CONVERSION/DIRECT_SALES/PARTNER |
-| amount | DECIMAL | (18,2) |  | 金额 | 1000000.00 |
-| currency | VARCHAR | 10 |  | 货币 | CNY |
-| stage | VARCHAR | 50 | ✓ | 阶段 | QUALIFICATION/NEEDS_ANALYSIS/PROPOSAL/NEGOTIATION/CLOSED_WON/CLOSED_LOST |
-| probability | INT |  |  | 赢单概率（0-100） | 60 |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| opportunity_id | VARCHAR | 64 | PK, NOT NULL | 商机唯一标识 | OPP_20231105001 |
+| opportunity_name | VARCHAR | 200 | NOT NULL | 商机名称 | 腾讯科技-AI平台采购项目 |
+| account_id | VARCHAR | 64 | FK, NOT NULL | 关联企业ID | ACC_20231105001 |
+| primary_contact_id | VARCHAR | 64 | FK | 主要联系人ID | CNT_20231105001 |
+| lead_id | VARCHAR | 64 | FK | 来源线索ID | LEAD_20231105001 |
+| opportunity_type | VARCHAR | 50 |  | 商机类型 | NEW_BUSINESS / UPSELL / RENEWAL / CROSS_SELL |
+| opportunity_source | VARCHAR | 100 |  | 商机来源 | LEAD_CONVERSION / DIRECT_SALES / PARTNER |
+| amount | DECIMAL | 18,2 |  | 预计金额(元) | 1000000.00 |
+| currency | VARCHAR | 10 |  | 货币单位 | CNY / USD / EUR |
+| stage | VARCHAR | 50 | NOT NULL | 当前阶段 | QUALIFICATION / NEEDS_ANALYSIS / PROPOSAL / NEGOTIATION / CLOSED_WON / CLOSED_LOST |
+| probability | INT |  | DEFAULT 0 | 赢单概率(0-100) | 60 |
 | expected_close_date | DATE |  |  | 预计成交日期 | 2023-12-31 |
 | actual_close_date | DATE |  |  | 实际成交日期 | 2023-12-25 |
-| close_reason | VARCHAR | 200 |  | 关闭原因 | 价格因素/竞争对手/预算不足/成功签约 |
-| owner_user_id | VARCHAR | 64 |  | 负责人ID | USER_001 |
-| product_ids | JSON |  |  | 产品ID数组 | ["PRD_001", "PRD_002"] |
-| campaign_id | VARCHAR | 64 |  | 来源活动ID（FK） | CMP_001 |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 10:30:00 |
-| updated_at | DATETIME |  | ✓ | 更新时间 | 2023-11-05 10:30:00 |
-| custom_fields | JSON |  |  | 自定义字段 | {"contract_type": "annual"} |
-| tags | JSON |  |  | 标签数组 | ["重点项目","Q4目标"] |
-| days_in_stage | INT |  |  | 当前阶段停留天数 | 15 |
-| is_won | BOOLEAN |  |  | 是否赢单 | false |
-| is_lost | BOOLEAN |  |  | 是否输单 | false |
+| close_reason | VARCHAR | 200 |  | 关闭原因 | 价格因素 / 竞争对手 / 预算不足 / 成功签约 |
+| owner_user_id | VARCHAR | 64 | FK | 负责人ID | USER_001 |
+| product_ids | JSON |  |  | 关联产品ID数组 | ["PRD_001", "PRD_002"] |
+| campaign_id | VARCHAR | 64 | FK | 来源活动ID | CMP_001 |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 10:30:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 15:20:00 |
+| custom_fields | JSON |  |  | 自定义字段 | {"contract_type": "annual", "payment_terms": "quarterly"} |
+| days_in_stage | INT |  | DEFAULT 0 | 当前阶段停留天数 | 15 |
+| is_won | BOOLEAN |  | DEFAULT FALSE | 是否赢单 | false |
+| is_lost | BOOLEAN |  | DEFAULT FALSE | 是否输单 | false |
 
 ---
 
 ### Channel 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| channel_id | VARCHAR | 64 | ✓ | 渠道唯一ID（PK） | CH_001 |
-| channel_name | VARCHAR | 100 | ✓ | 渠道名称 | 官网-产品页 |
-| channel_type | VARCHAR | 50 | ✓ | 渠道类型 | WEBSITE/WECHAT/DOUYIN/EMAIL/PHONE/OFFLINE/PARTNER |
-| channel_category | VARCHAR | 50 |  | 渠道分类 | ONLINE（线上）/OFFLINE（线下）/SOCIAL（社交）/DIRECT（直销） |
-| parent_channel_id | VARCHAR | 64 |  | 父渠道ID（FK） | CH_PARENT_001 |
-| channel_status | VARCHAR | 50 | ✓ | 渠道状态 | ACTIVE（活跃）/INACTIVE（停用）/TESTING（测试中） |
-| channel_config | JSON |  |  | 渠道配置 | {"api_key": "xxx", "webhook_url": "xxx"} |
-| cost | DECIMAL | (18,2) |  | 成本 | 50000.00 |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 10:30:00 |
-| updated_at | DATETIME |  | ✓ | 更新时间 | 2023-11-05 10:30:00 |
-| custom_fields | JSON |  |  | 自定义字段 | {"partner_name": "XX合作伙伴"} |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| channel_id | VARCHAR | 64 | PK, NOT NULL | 渠道唯一标识 | CH_001 |
+| channel_name | VARCHAR | 100 | NOT NULL | 渠道名称 | 官网-产品页 |
+| channel_type | VARCHAR | 50 | NOT NULL | 渠道类型 | WEBSITE / WECHAT / DOUYIN / EMAIL / PHONE / OFFLINE / PARTNER |
+| channel_category | VARCHAR | 50 |  | 渠道分类 | ONLINE / OFFLINE / SOCIAL / DIRECT |
+| parent_channel_id | VARCHAR | 64 | FK | 父渠道ID | CH_PARENT_001 |
+| channel_status | VARCHAR | 50 | NOT NULL | 渠道状态 | ACTIVE / INACTIVE / TESTING |
+| channel_config | JSON |  |  | 渠道配置信息 | {"api_key": "xxx", "webhook_url": "xxx", "app_id": "xxx"} |
+| cost | DECIMAL | 18,2 |  | 渠道成本(元/月) | 50000.00 |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 10:30:00 |
+| updated_at | DATETIME |  | NOT NULL | 更新时间 | 2023-11-05 15:20:00 |
+| custom_fields | JSON |  |  | 自定义字段 | {"partner_name": "某某合作伙伴", "contract_end": "2024-12-31"} |
 
 ---
 
 ### Touchpoint 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| touchpoint_id | VARCHAR | 64 | ✓ | 触点唯一ID（PK） | TP_20231105001 |
-| touchpoint_type | VARCHAR | 50 | ✓ | 触点类型 | PAGE_VIEW/FORM_SUBMIT/DOWNLOAD/EMAIL/CALL/MEETING/CHAT/SOCIAL |
-| channel_id | VARCHAR | 64 |  | 渠道ID（FK） | CH_001 |
-| campaign_id | VARCHAR | 64 |  | 活动ID（FK） | CMP_001 |
-| contact_id | VARCHAR | 64 |  | 联系人ID（FK） | CNT_20231105001 |
-| lead_id | VARCHAR | 64 |  | 线索ID（FK） | LEAD_20231105001 |
-| account_id | VARCHAR | 64 |  | 企业ID（FK） | ACC_20231105001 |
-| touchpoint_time | DATETIME | ✓ | ✓ | 触点时间 | 2023-11-05 14:30:00 |
-| touchpoint_direction | VARCHAR | 20 |  | 触点方向 | INBOUND（入站）/OUTBOUND（出站） |
-| touchpoint_status | VARCHAR | 50 |  | 触点状态 | COMPLETED（完成）/SCHEDULED（已安排）/CANCELLED（取消） |
-| content_type | VARCHAR | 50 |  | 内容类型 | WHITEPAPER/CASE_STUDY/WEBINAR/DEMO/PROPOSAL |
-| content_id | VARCHAR | 64 |  | 内容ID（FK） | CONTENT_001 |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| touchpoint_id | VARCHAR | 64 | PK, NOT NULL | 触点唯一标识 | TP_20231105001 |
+| touchpoint_type | VARCHAR | 50 | NOT NULL | 触点类型 | PAGE_VIEW / FORM_SUBMIT / DOWNLOAD / EMAIL / CALL / MEETING / CHAT |
+| channel_id | VARCHAR | 64 | FK | 渠道ID | CH_001 |
+| campaign_id | VARCHAR | 64 | FK | 营销活动ID | CMP_001 |
+| contact_id | VARCHAR | 64 | FK | 联系人ID | CNT_20231105001 |
+| lead_id | VARCHAR | 64 | FK | 线索ID | LEAD_20231105001 |
+| account_id | VARCHAR | 64 | FK | 企业ID | ACC_20231105001 |
+| touchpoint_time | DATETIME |  | NOT NULL | 触点发生时间 | 2023-11-05 14:30:00 |
+| touchpoint_direction | VARCHAR | 20 |  | 触点方向 | INBOUND / OUTBOUND |
+| touchpoint_status | VARCHAR | 50 |  | 触点状态 | COMPLETED / SCHEDULED / CANCELLED |
+| content_type | VARCHAR | 50 |  | 内容类型 | WHITEPAPER / CASE_STUDY / WEBINAR / DEMO / PROPOSAL |
+| content_id | VARCHAR | 64 | FK | 内容ID | CONTENT_001 |
 | subject | VARCHAR | 200 |  | 主题 | 产品演示会议 |
-| description | TEXT |  |  | 描述 | 讨论了AI平台的技术架构... |
-| duration_seconds | INT |  |  | 持续时长（秒） | 3600 |
-| owner_user_id | VARCHAR | 64 |  | 负责人ID | USER_001 |
-| metadata | JSON |  |  | 元数据 | {"device": "mobile", "location": "Beijing"} |
-| utm_params | JSON |  |  | UTM参数 | {"utm_source": "baidu", "utm_medium": "cpc"} |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 14:30:00 |
+| description | TEXT |  |  | 描述详情 | 讨论了AI平台的技术架构和实施方案 |
+| duration_seconds | INT |  |  | 持续时长(秒) | 3600 |
+| owner_user_id | VARCHAR | 64 | FK | 负责人ID | USER_001 |
+| metadata | JSON |  |  | 元数据 | {"device": "mobile", "location": "Beijing", "ip": "192.168.1.1"} |
+| utm_params | JSON |  |  | UTM追踪参数 | {"utm_source": "baidu", "utm_medium": "cpc", "utm_campaign": "Q4"} |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 14:30:00 |
 
 ---
 
 ### Event 详细字段设计
 
-| 字段名 | 类型 | 长度 | 必填 | 说明 | 示例 |
-|--------|------|------|------|------|------|
-| event_id | VARCHAR | 64 | ✓ | 事件唯一ID（PK） | EVT_20231105001 |
-| event_name | VARCHAR | 100 | ✓ | 事件名称 | page_view |
-| event_type | VARCHAR | 50 | ✓ | 事件类型 | PAGE_VIEW/CLICK/FORM_START/FORM_SUBMIT/DOWNLOAD/VIDEO_PLAY/SEARCH |
-| channel_id | VARCHAR | 64 |  | 渠道ID（FK） | CH_001 |
-| contact_id | VARCHAR | 64 |  | 联系人ID（FK） | CNT_20231105001 |
-| lead_id | VARCHAR | 64 |  | 线索ID（FK） | LEAD_20231105001 |
-| account_id | VARCHAR | 64 |  | 企业ID（FK） | ACC_20231105001 |
-| event_time | DATETIME |  | ✓ | 事件时间 | 2023-11-05 14:35:20 |
+| 字段名 | 类型 | 长度 | 约束 | 说明 | 示例值 |
+|--------|------|------|------|------|--------|
+| event_id | VARCHAR | 64 | PK, NOT NULL | 事件唯一标识 | EVT_20231105001 |
+| event_name | VARCHAR | 100 | NOT NULL | 事件名称 | page_view |
+| event_type | VARCHAR | 50 | NOT NULL | 事件类型 | PAGE_VIEW / CLICK / FORM_START / FORM_SUBMIT / DOWNLOAD / VIDEO_PLAY |
+| channel_id | VARCHAR | 64 | FK | 渠道ID | CH_001 |
+| contact_id | VARCHAR | 64 | FK | 联系人ID | CNT_20231105001 |
+| lead_id | VARCHAR | 64 | FK | 线索ID | LEAD_20231105001 |
+| account_id | VARCHAR | 64 | FK | 企业ID | ACC_20231105001 |
+| event_time | DATETIME |  | NOT NULL | 事件发生时间 | 2023-11-05 14:35:20 |
 | session_id | VARCHAR | 64 |  | 会话ID | SESSION_20231105001 |
-| device_type | VARCHAR | 50 |  | 设备类型 | DESKTOP/MOBILE/TABLET |
-| browser | VARCHAR | 50 |  | 浏览器 | Chrome |
-| os | VARCHAR | 50 |  | 操作系统 | Windows 10 |
+| device_type | VARCHAR | 50 |  | 设备类型 | DESKTOP / MOBILE / TABLET |
+| browser | VARCHAR | 50 |  | 浏览器 | Chrome / Safari / Firefox / Edge |
+| os | VARCHAR | 50 |  | 操作系统 | Windows 10 / iOS 16 / Android 13 |
 | ip_address | VARCHAR | 50 |  | IP地址 | 192.168.1.1 |
 | page_url | VARCHAR | 1000 |  | 页面URL | https://www.example.com/product/ai-platform |
 | referrer_url | VARCHAR | 1000 |  | 来源URL | https://www.baidu.com/s?wd=AI平台 |
-| event_properties | JSON |  |  | 事件属性 | {"button_text": "申请试用", "form_id": "trial_form"} |
-| utm_params | JSON |  |  | UTM参数 | {"utm_source": "baidu", "utm_campaign": "Q4_campaign"} |
-| created_at | DATETIME |  | ✓ | 创建时间 | 2023-11-05 14:35:20 |
+| event_properties | JSON |  |  | 事件属性 | {"button_text": "申请试用", "form_id": "trial_form", "product": "AI平台"} |
+| utm_params | JSON |  |  | UTM追踪参数 | {"utm_source": "baidu", "utm_campaign": "Q4_campaign", "utm_content": "ad1"} |
+| created_at | DATETIME |  | NOT NULL | 创建时间 | 2023-11-05 14:35:20 |
 
 ---
 
 ## 全渠道身份映射方案
 
-### 身份识别优先级
-
-```mermaid
-graph LR
-    A[多渠道数据] --> B{身份识别}
-    B --> C[1. 手机号匹配]
-    B --> D[2. 邮箱匹配]
-    B --> E[3. 企业微信ID]
-    B --> F[4. 统一社会信用代码]
-    B --> G[5. 自定义ID]
-    
-    C --> H[合并至统一Contact]
-    D --> H
-    E --> H
-    F --> I[合并至统一Account]
-    G --> H
-    
-    H --> J[建立ChannelIdentity关联]
-    I --> K[建立AccountChannelIdentity关联]
-```
-
-### 身份合并规则
+### 身份识别匹配规则
 
 ```mermaid
 flowchart TD
-    Start[接收新数据] --> Check{是否存在标识符}
-    Check -->|有手机号| Phone[手机号匹配]
-    Check -->|有邮箱| Email[邮箱匹配]
-    Check -->|有微信ID| WeChat[微信ID匹配]
+    Start([接收多渠道数据]) --> ExtractID[提取身份标识符]
     
-    Phone --> Match{找到匹配?}
-    Email --> Match
-    WeChat --> Match
+    ExtractID --> CheckPhone{是否有<br/>手机号?}
+    ExtractID --> CheckEmail{是否有<br/>邮箱?}
+    ExtractID --> CheckWechat{是否有<br/>微信ID?}
+    ExtractID --> CheckCorpID{是否有<br/>企业信用代码?}
     
-    Match -->|是| Merge[合并到现有Contact]
-    Match -->|否| Create[创建新Contact]
+    CheckPhone -->|是| MatchPhone[手机号匹配<br/>优先级: 1]
+    CheckEmail -->|是| MatchEmail[邮箱匹配<br/>优先级: 2]
+    CheckWechat -->|是| MatchWechat[微信ID匹配<br/>优先级: 3]
+    CheckCorpID -->|是| MatchCorpID[企业信用代码匹配<br/>优先级: 1]
     
-    Merge --> AddIdentity[添加渠道身份]
-    Create --> AddIdentity
+    MatchPhone --> FoundContact{找到匹配<br/>Contact?}
+    MatchEmail --> FoundContact
+    MatchWechat --> FoundContact
     
-    AddIdentity --> UpdateScore[更新评分]
-    UpdateScore --> End[完成]
+    MatchCorpID --> FoundAccount{找到匹配<br/>Account?}
+    
+    FoundContact -->|是| MergeContact[合并到现有Contact]
+    FoundContact -->|否| CreateContact[创建新Contact]
+    
+    FoundAccount -->|是| MergeAccount[合并到现有Account]
+    FoundAccount -->|否| CreateAccount[创建新Account]
+    
+    MergeContact --> AddChannelIdentity[添加/更新<br/>ContactChannelIdentity]
+    CreateContact --> AddChannelIdentity
+    
+    MergeAccount --> AddAccountIdentity[添加/更新<br/>AccountChannelIdentity]
+    CreateAccount --> AddAccountIdentity
+    
+    AddChannelIdentity --> UpdateSummary[更新ContactSummary]
+    AddAccountIdentity --> UpdateAccountSummary[更新AccountSummary]
+    
+    UpdateSummary --> End([完成])
+    UpdateAccountSummary --> End
+    
+    style Start fill:#e1f5ff
+    style End fill:#e8f5e9
+    style MergeContact fill:#fff9c4
+    style MergeAccount fill:#fff9c4
+    style CreateContact fill:#ffe0b2
+    style CreateAccount fill:#ffe0b2
+```
+
+### 身份聚合优先级
+
+```mermaid
+graph LR
+    subgraph Priority["身份匹配优先级 Identity Matching Priority"]
+        direction TB
+        P1["优先级1: 手机号<br/>Priority 1: Mobile Phone<br/>唯一性: 高<br/>准确性: 95%"]
+        P2["优先级2: 邮箱<br/>Priority 2: Email<br/>唯一性: 高<br/>准确性: 90%"]
+        P3["优先级3: 企业微信ID<br/>Priority 3: Enterprise WeChat<br/>唯一性: 中<br/>准确性: 85%"]
+        P4["优先级4: 统一社会信用代码<br/>Priority 4: Unified Credit Code<br/>唯一性: 极高<br/>准确性: 99%"]
+        P5["优先级5: 自定义ID<br/>Priority 5: Custom ID<br/>唯一性: 中<br/>准确性: 70%"]
+    end
+    
+    subgraph Result["匹配结果 Matching Result"]
+        direction TB
+        R1["Contact统一身份<br/>Unified Contact"]
+        R2["Account统一身份<br/>Unified Account"]
+    end
+    
+    P1 & P2 & P3 & P5 --> R1
+    P4 --> R2
+    
+    style P1 fill:#c8e6c9
+    style P2 fill:#c8e6c9
+    style P4 fill:#c8e6c9
+    style P3 fill:#fff9c4
+    style P5 fill:#ffccbc
+    style R1 fill:#e1f5ff
+    style R2 fill:#e1f5ff
 ```
 
 ---
 
 ## 数据字典总结
 
-### 核心实体数量统计
+### 核心实体统计
 
-| 实体类型 | 实体数量 | 说明 |
-|---------|---------|------|
-| 客户主体实体 | 3 | Account, Contact, Lead |
-| 业务实体 | 2 | Opportunity, Product |
-| 营销实体 | 2 | Campaign, Channel |
-| 交互实体 | 2 | Touchpoint, Event |
-| 关系实体 | 6 | AccountContactRelation, AccountRelation, OpportunityProduct, CampaignMember, TagRelation, SegmentMember |
-| 身份实体 | 3 | AccountChannelIdentity, ContactChannelIdentity, LeadChannelIdentity |
-| 分析实体 | 5 | Segment, Tag, Score, Attribution, CustomerJourney |
-| 支撑实体 | 2 | Industry, ProductCategory |
-| **合计** | **25** | 覆盖B2B CDP核心业务场景 |
+| 实体分类 | 实体名称 | 数量 | 说明 |
+|---------|---------|------|------|
+| 客户主体实体 | Account, Contact, Lead | 3 | 核心客户数据 |
+| 汇总数据实体 | AccountSummary, ContactSummary, LeadSummary | 3 | 统计汇总数据 |
+| 业务实体 | Opportunity, Product, ProductCategory | 3 | 业务交易数据 |
+| 营销实体 | Campaign, Channel | 2 | 营销活动管理 |
+| 交互实体 | Touchpoint, Event | 2 | 客户互动行为 |
+| 关系实体 | AccountContactRelation, AccountRelation, OpportunityProduct, CampaignMember, TagRelation, SegmentMember | 6 | 实体关系映射 |
+| 身份实体 | AccountChannelIdentity, ContactChannelIdentity, LeadChannelIdentity | 3 | 全渠道身份映射 |
+| 分析实体 | Segment, Tag, ScoreModel, ScoreRecord, ScoreHistory, Attribution, TouchpointAttribution, CustomerJourney, JourneyStage | 9 | 数据分析洞察 |
+| 性能实体 | ChannelPerformance, CampaignPerformance | 2 | 绩效统计 |
+| 历史实体 | OpportunityStageHistory | 1 | 变更历史追踪 |
+| 支撑实体 | Industry, TouchpointAttachment | 2 | 基础支撑数据 |
+| **合计** | | **36** | 完整覆盖B2B CDP业务场景 |
 
 ---
 
-## 扩展建议
+## 汇总数据表设计说明
 
-### 可选扩展实体（根据业务需要）
+### 为什么需要汇总数据表
 
-1. **Content（内容资产）**
-   - 营销内容管理
-   - 内容效果追踪
+1. **性能优化**
+   - 避免频繁的多表JOIN和聚合计算
+   - 提升客户360度视图的查询速度
+   - 降低数据库负载
 
-2. **Order（订单）**
-   - 如需管理订单详情
-   - 支持电商场景
+2. **业务需求**
+   - 快速展示客户健康度评分
+   - 实时显示客户价值指标
+   - 支持客户预警和监控
 
-3. **Contract（合同）**
-   - 合同管理
-   - 续约提醒
+3. **数据一致性**
+   - 统一的计算口径
+   - 定时批量更新保证数据准确性
+   - 避免实时计算的结果不一致
 
-4. **Partner（合作伙伴）**
-   - 渠道伙伴管理
-   - 分销体系
+### 汇总数据更新策略
 
-5. **Competitor（竞争对手）**
-   - 竞争对手分析
-   - 竞品情报
-
-6. **Task（任务）**
-   - 销售任务管理
-   - 跟进提醒
-
-7. **Note（备注）**
-   - 客户备注
-   - 沟通记录
+```mermaid
+flowchart LR
+    subgraph Trigger["触发更新 Update Triggers"]
+        T1[定时任务<br/>Scheduled Job<br/>每小时]
+        T2[实时触发<br/>Real-time Trigger<br/>关键事件]
+        T3[手动刷新<br/>Manual Refresh<br/>按需执行]
+    end
+    
+    subgraph Calculation["计算引擎 Calculation Engine"]
+        C1[聚合计算<br/>Aggregation]
+        C2[评分计算<br/>Scoring]
+        C3[规则引擎<br/>Rule Engine]
+    end
+    
+    subgraph Summary["汇总表 Summary Tables"]
+        S1[AccountSummary<br/>企业汇总]
+        S2[ContactSummary<br/>联系人汇总]
+        S3[LeadSummary<br/>线索汇总]
+    end
+    
+    T1 --> C1
+    T2 --> C2
+    T3 --> C3
+    
+    C1 & C2 & C3 --> S1 & S2 & S3
+    
+    style T1 fill:#e3f2fd
+    style T2 fill:#fff3e0
+    style T3 fill:#f3e5f5
+    style S1 fill:#e8f5e9
+    style S2 fill:#e8f5e9
+    style S3 fill:#e8f5e9
+```
 
 ---
 
 ## 技术实现建议
 
-### 数据库选型建议
+### 数据库架构
 
 ```mermaid
-graph TB
-    subgraph "主数据存储"
-        PG[PostgreSQL<br/>关系型数据<br/>Account/Contact/Lead/Opportunity]
+flowchart TB
+    subgraph AppLayer["应用层 Application Layer"]
+        API[API服务<br/>API Service]
+        Worker[后台任务<br/>Background Worker]
     end
     
-    subgraph "行为数据存储"
-        CH[ClickHouse<br/>海量事件数据<br/>Event/Touchpoint]
+    subgraph DataLayer["数据层 Data Layer"]
+        direction TB
+        
+        subgraph OLTP["OLTP 在线事务处理"]
+            PG[(PostgreSQL<br/>主数据存储<br/>Account/Contact/Lead<br/>Opportunity)]
+        end
+        
+        subgraph BigData["大数据存储 Big Data Storage"]
+            CH[(ClickHouse<br/>行为数据<br/>Event/Touchpoint<br/>10亿+记录)]
+        end
+        
+        subgraph Cache["缓存层 Cache Layer"]
+            Redis[(Redis<br/>热数据缓存<br/>Summary/Score/Tag)]
+        end
+        
+        subgraph Search["搜索引擎 Search Engine"]
+            ES[(Elasticsearch<br/>全文检索<br/>客户搜索/内容搜索)]
+        end
+        
+        subgraph Analytics["分析层 Analytics Layer"]
+            DW[(数据仓库<br/>Data Warehouse<br/>BI报表/数据分析)]
+        end
     end
     
-    subgraph "搜索引擎"
-        ES[Elasticsearch<br/>全文搜索<br/>客户搜索/标签搜索]
-    end
+    API --> PG
+    API --> Redis
+    API --> ES
     
-    subgraph "缓存层"
-        Redis[Redis<br/>热数据缓存<br/>评分/标签]
-    end
+    Worker --> PG
+    Worker --> CH
+    Worker --> Redis
     
-    subgraph "数据仓库"
-        DW[数据仓库<br/>分析报表<br/>BI分析]
-    end
+    PG -.同步.-> ES
+    PG -.同步.-> Redis
+    PG -.ETL.-> DW
+    CH -.ETL.-> DW
     
-    PG --> ES
-    PG --> Redis
-    CH --> DW
-    PG --> DW
+    classDef oltp fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef bigdata fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef cache fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef search fill:#e1f5ff,stroke:#0277bd,stroke-width:2px
+    classDef analytics fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    
+    class PG oltp
+    class CH bigdata
+    class Redis cache
+    class ES search
+    class DW analytics
 ```
 
-### 关键索引建议
+### 索引设计建议
 
-**Account表索引：**
+**Account表索引:**
 ```sql
 -- 主键索引
-PRIMARY KEY (account_id)
+PRIMARY KEY (account_id);
 
--- 业务索引
+-- 唯一索引
+CREATE UNIQUE INDEX uk_account_credit_code ON Account(unified_social_credit_code) WHERE unified_social_credit_code IS NOT NULL;
+
+-- 业务查询索引
 CREATE INDEX idx_account_name ON Account(account_name);
-CREATE INDEX idx_unified_code ON Account(unified_social_credit_code);
 CREATE INDEX idx_account_status ON Account(account_status);
 CREATE INDEX idx_account_owner ON Account(owner_user_id);
-CREATE INDEX idx_account_created ON Account(created_at);
+CREATE INDEX idx_account_created ON Account(created_at DESC);
+CREATE INDEX idx_account_industry ON Account(industry_id);
 
 -- 组合索引
 CREATE INDEX idx_account_type_status ON Account(account_type, account_status);
-CREATE INDEX idx_account_city ON Account(province, city);
+CREATE INDEX idx_account_location ON Account(province, city);
+CREATE INDEX idx_account_lifecycle ON Account(lifecycle_stage, account_status);
 ```
 
-**Contact表索引：**
+**AccountSummary表索引:**
+```sql
+-- 主键和唯一索引
+PRIMARY KEY (summary_id);
+CREATE UNIQUE INDEX uk_summary_account ON AccountSummary(account_id);
+
+-- 查询索引
+CREATE INDEX idx_summary_health_score ON AccountSummary(health_score DESC);
+CREATE INDEX idx_summary_last_activity ON AccountSummary(last_activity_at DESC);
+CREATE INDEX idx_summary_total_revenue ON AccountSummary(total_revenue DESC);
+CREATE INDEX idx_summary_win_rate ON AccountSummary(win_rate DESC);
+```
+
+**Contact表索引:**
 ```sql
 -- 主键索引
-PRIMARY KEY (contact_id)
+PRIMARY KEY (contact_id);
 
--- 业务索引
-CREATE INDEX idx_contact_phone ON Contact(mobile_phone);
-CREATE INDEX idx_contact_email ON Contact(email);
-CREATE INDEX idx_contact_wechat ON Contact(wechat_id);
+-- 唯一索引
+CREATE UNIQUE INDEX uk_contact_phone ON Contact(mobile_phone) WHERE mobile_phone IS NOT NULL;
+CREATE UNIQUE INDEX uk_contact_email ON Contact(email) WHERE email IS NOT NULL;
+
+-- 业务查询索引
+CREATE INDEX idx_contact_name ON Contact(contact_name);
 CREATE INDEX idx_contact_account ON Contact(primary_account_id);
 CREATE INDEX idx_contact_status ON Contact(contact_status);
+CREATE INDEX idx_contact_wechat ON Contact(wechat_id);
 
 -- 组合索引
 CREATE INDEX idx_contact_phone_email ON Contact(mobile_phone, email);
+CREATE INDEX idx_contact_lifecycle ON Contact(lifecycle_stage, contact_status);
 ```
 
-**Event表索引（ClickHouse）：**
+**Event表索引 (ClickHouse):**
 ```sql
--- 主排序键
-ORDER BY (event_time, contact_id, event_type)
+-- 排序键设计
+ORDER BY (channel_id, event_time, contact_id, event_type);
 
--- 分区键
-PARTITION BY toYYYYMM(event_time)
+-- 分区键设计
+PARTITION BY toYYYYMM(event_time);
+
+-- 采样表达式
+SAMPLE BY cityHash64(event_id);
+```
+
+**Touchpoint表索引:**
+```sql
+-- 主键索引
+PRIMARY KEY (touchpoint_id);
+
+-- 查询索引
+CREATE INDEX idx_touchpoint_contact ON Touchpoint(contact_id, touchpoint_time DESC);
+CREATE INDEX idx_touchpoint_lead ON Touchpoint(lead_id, touchpoint_time DESC);
+CREATE INDEX idx_touchpoint_account ON Touchpoint(account_id, touchpoint_time DESC);
+CREATE INDEX idx_touchpoint_channel ON Touchpoint(channel_id, touchpoint_time DESC);
+CREATE INDEX idx_touchpoint_campaign ON Touchpoint(campaign_id, touchpoint_time DESC);
+CREATE INDEX idx_touchpoint_time ON Touchpoint(touchpoint_time DESC);
+CREATE INDEX idx_touchpoint_type ON Touchpoint(touchpoint_type, touchpoint_time DESC);
 ```
 
 ---
 
 ## 总结
 
-本实体设计方案包含：
+本B2B CDP实体设计方案提供:
 
-✅ **25个核心实体**，覆盖B2B CDP全业务场景  
-✅ **全渠道身份映射**方案，支持跨渠道客户识别  
-✅ **完整的客户生命周期**管理  
-✅ **从线索到商机**的完整转化流程  
-✅ **灵活的标签和分群**能力  
-✅ **多维度的归因分析**能力  
-✅ **详细的字段设计**和数据字典  
+**核心能力**
+- 36个实体，完整覆盖B2B CDP业务场景
+- 全渠道身份映射方案，支持跨渠道客户识别
+- 汇总数据表设计，优化查询性能
+- 完整的客户生命周期管理
+- 从线索到商机的完整转化流程
 
-该方案可以支撑：
+**关键特性**
+- 灵活的标签和分群能力
+- 多维度的归因分析能力
+- 详细的字段设计和数据字典
+- 专业的数据库架构建议
+- 完整的索引优化方案
+
+**适用场景**
 - 全渠道客户数据整合
-- 客户360度画像
+- 客户360度画像分析
 - 精准营销和客户分群
 - 销售线索管理和转化
 - 客户旅程分析
 - 营销归因分析
 - 客户价值评估
+- 客户健康度监控
 
 根据实际业务需要，可以选择性实现部分实体，并在后续迭代中逐步完善。
