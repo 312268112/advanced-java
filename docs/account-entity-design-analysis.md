@@ -140,7 +140,7 @@ erDiagram
     
     AccountSummary {
         varchar summary_id PK "主键"
-        varchar account_id FK UK "账户ID-唯一"
+        varchar account_id FK "账户ID-唯一"
         int total_contacts "联系人总数"
         int total_opportunities "商机总数"
         int total_leads "线索总数"
