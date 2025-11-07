@@ -3,64 +3,90 @@
 ## 目录
 
 - [1. 项目概述](#1-项目概述)
-- [2. 核心概念](#2-核心概念)
-- [3. 核心抽象设计](#3-核心抽象设计)
-- [4. 执行流程设计](#4-执行流程设计)
-- [5. 背压机制设计](#5-背压机制设计)
+- [2. 整体架构](#2-整体架构)
+- [3. 核心抽象](#3-核心抽象)
+- [4. 执行模型](#4-执行模型)
+- [5. 状态与容错](#5-状态与容错)
 - [6. 数据库设计](#6-数据库设计)
-- [7. 部署架构](#7-部署架构)
+- [7. 部署方案](#7-部署方案)
 
 ---
 
 ## 1. 项目概述
 
-### 1.1 设计理念
+### 1.1 设计目标
 
-Pipeline Framework 借鉴 **Flink 的设计思想**，基于 **Source → Operator → Sink** 的模式构建数据处理流程，但底层使用 **Project Reactor** 实现响应式流处理。
+构建一个**轻量级、响应式、可靠**的数据处理框架，借鉴 Flink 的设计思想，但底层使用 Project Reactor 实现。
 
-**核心设计原则**：
-- **上层抽象**：采用 Flink 的 Source、Operator、Sink 概念模型
-- **底层实现**：使用 Reactor 提供响应式能力和天然背压支持
-- **单实例执行**：每个 Job 在单个实例内完整执行，不跨实例传输数据
-- **状态管理**：借鉴 Flink 的 State Backend 和 Checkpoint 机制
+**核心特点**：
+- **上层抽象**：Source → Operator → Sink，与 Flink 概念对齐
+- **底层引擎**：Project Reactor，天然支持背压和响应式流
+- **执行模型**：每个 Job 在单实例内完整执行，无跨实例数据传输
+- **容错机制**：Checkpoint 机制保证状态一致性和故障恢复
 
-### 1.2 架构分层
+### 1.2 三种执行模式
+
+| 模式 | 场景 | 数据特征 | 执行特点 |
+|------|------|---------|---------|
+| **STREAMING** | 实时流处理 | 无限流（Kafka/MQ） | 持续运行、定期Checkpoint、支持窗口 |
+| **BATCH_ROLLER** | 数据同步 | 分页API | 自动翻页、读完结束、保存页码 |
+| **SQL_TASK** | 数据分析 | 复杂SQL结果 | 执行SQL、流式读取、完成后结束 |
+
+### 1.3 技术选型
+
+| 组件 | 选型 | 作用 |
+|------|------|------|
+| 响应式流引擎 | Project Reactor | 背压控制、异步处理 |
+| 元数据存储 | PostgreSQL | Job定义、执行记录、Checkpoint元信息 |
+| 状态存储 | RocksDB | 算子状态（窗口数据、聚合值） |
+| Checkpoint存储 | S3/MinIO | 状态快照持久化 |
+| 任务调度 | Spring Scheduler | Cron表达式、依赖调度 |
+| 监控指标 | Micrometer + Prometheus | 吞吐量、延迟、背压 |
+
+---
+
+## 2. 整体架构
+
+### 2.1 系统分层
 
 ```mermaid
 graph TB
-    subgraph "用户层"
-        API[Job定义API<br/>定义Source/Operator/Sink]
+    subgraph API["API Layer"]
+        JobBuilder["Job Builder API"]
     end
     
-    subgraph "抽象层"
-        Source[Source抽象<br/>数据源统一接口]
-        Operator[Operator抽象<br/>数据处理算子]
-        Sink[Sink抽象<br/>数据输出接口]
-        StreamGraph[StreamGraph<br/>逻辑执行图]
-        JobGraph[JobGraph<br/>物理执行图]
+    subgraph Abstraction["Abstraction Layer"]
+        Source["Source<T>"]
+        Operator["Operator<IN,OUT>"]
+        Sink["Sink<T>"]
     end
     
-    subgraph "执行层"
-        Scheduler[Job Scheduler<br/>任务调度]
-        Executor[Job Executor<br/>任务执行]
-        ReactorEngine[Reactor Engine<br/>响应式流引擎]
+    subgraph Graph["Graph Layer"]
+        StreamGraph["StreamGraph<br/>(Logical)"]
+        JobGraph["JobGraph<br/>(Physical)"]
     end
     
-    subgraph "运行时层"
-        State[State Backend<br/>状态存储]
-        Checkpoint[Checkpoint<br/>检查点机制]
-        Metrics[Metrics<br/>指标监控]
+    subgraph Execution["Execution Layer"]
+        Scheduler["Job Scheduler"]
+        Executor["Job Executor"]
+        ReactorEngine["Reactor Engine"]
     end
     
-    subgraph "存储层"
-        PostgreSQL[(PostgreSQL<br/>元数据存储)]
-        RocksDB[(RocksDB<br/>状态存储)]
-        S3[(S3/HDFS<br/>Checkpoint存储)]
+    subgraph Runtime["Runtime Layer"]
+        StateBackend["State Backend"]
+        CheckpointCoordinator["Checkpoint Coordinator"]
+        MetricsCollector["Metrics Collector"]
     end
     
-    API --> Source
-    API --> Operator
-    API --> Sink
+    subgraph Storage["Storage Layer"]
+        PostgreSQL[("PostgreSQL")]
+        RocksDB[("RocksDB")]
+        S3[("S3/MinIO")]
+    end
+    
+    JobBuilder --> Source
+    JobBuilder --> Operator
+    JobBuilder --> Sink
     
     Source --> StreamGraph
     Operator --> StreamGraph
@@ -68,359 +94,198 @@ graph TB
     
     StreamGraph --> JobGraph
     JobGraph --> Scheduler
+    
     Scheduler --> Executor
     Executor --> ReactorEngine
     
-    ReactorEngine --> State
-    ReactorEngine --> Checkpoint
-    ReactorEngine --> Metrics
+    ReactorEngine --> StateBackend
+    ReactorEngine --> CheckpointCoordinator
+    ReactorEngine --> MetricsCollector
     
-    State --> RocksDB
-    Checkpoint --> S3
+    StateBackend --> RocksDB
+    CheckpointCoordinator --> S3
     Scheduler --> PostgreSQL
     Executor --> PostgreSQL
+    MetricsCollector --> PostgreSQL
 ```
 
-### 1.3 三种执行模式
+**架构说明**：
 
-| 模式 | 数据源特征 | 执行特点 | 使用场景 |
-|------|-----------|---------|----------|
-| **STREAMING** | 无限流（Kafka/MQ） | 持续运行、支持水印、必须Checkpoint | 实时流处理、实时告警 |
-| **BATCH_ROLLER** | 有界数据（HTTP API分页） | 自动翻页、读完结束、可选Checkpoint | 数据同步、历史数据迁移 |
-| **SQL_TASK** | SQL查询结果 | 执行SQL、流式读取、完成后结束 | 多表Join、数据分析、报表生成 |
+- **API Layer**：提供 Job 定义 API，用户通过 Builder 模式定义 Source、Operator、Sink
+- **Abstraction Layer**：核心抽象接口，定义数据源、处理算子、输出目标的统一规范
+- **Graph Layer**：将用户定义转换为执行图
+  - StreamGraph：逻辑执行图，一对一映射用户定义
+  - JobGraph：物理执行图，应用算子链优化
+- **Execution Layer**：任务调度和执行
+  - Scheduler：根据调度配置触发 Job
+  - Executor：管理 Job 生命周期
+  - Reactor Engine：基于 Reactor 的流处理引擎
+- **Runtime Layer**：运行时支持
+  - State Backend：算子状态管理
+  - Checkpoint Coordinator：定期触发 Checkpoint
+  - Metrics Collector：采集性能指标
+- **Storage Layer**：持久化存储
+  - PostgreSQL：元数据（Job定义、执行记录、Checkpoint元信息）
+  - RocksDB：算子状态（窗口数据、聚合值）
+  - S3/MinIO：Checkpoint快照文件
+
+### 2.2 核心模块职责
+
+| 模块 | 职责 | 输入 | 输出 |
+|------|------|------|------|
+| **Job Builder** | 构建 Job 定义 | Source/Operator/Sink配置 | StreamGraph |
+| **Graph Optimizer** | 优化执行图 | StreamGraph | JobGraph |
+| **Job Scheduler** | 任务调度 | 调度配置（Cron/依赖） | 触发执行信号 |
+| **Job Executor** | 任务执行 | JobGraph | 执行结果 |
+| **Reactor Engine** | 流处理引擎 | Source Flux | Sink结果 |
+| **State Backend** | 状态管理 | 状态读写请求 | 状态值 |
+| **Checkpoint Coordinator** | 检查点协调 | Checkpoint触发信号 | 快照文件 |
 
 ---
 
-## 2. 核心概念
+## 3. 核心抽象
 
-### 2.1 八大核心抽象
+### 3.1 抽象关系图
 
 ```mermaid
 graph LR
-    subgraph "数据流抽象"
-        Source[Source<br/>数据源抽象]
-        Operator[Operator<br/>算子抽象]
-        Sink[Sink<br/>输出抽象]
+    subgraph Job["Job Definition"]
+        direction TB
+        JobConfig["Job Config<br/>name, parallelism<br/>checkpoint interval"]
+        DataFlow["Data Flow<br/>Source → Operator → Sink"]
     end
     
-    subgraph "任务抽象"
-        Job[Job<br/>任务定义]
-        StreamGraph[StreamGraph<br/>逻辑执行图]
-        JobGraph[JobGraph<br/>物理执行图]
+    subgraph Components["Core Components"]
+        direction TB
+        S["Source&lt;T&gt;<br/>run()<br/>snapshotState()<br/>restoreState()"]
+        O["Operator&lt;IN,OUT&gt;<br/>processElement()<br/>open()/close()"]
+        K["Sink&lt;T&gt;<br/>invoke()<br/>flush()"]
     end
     
-    subgraph "运行时抽象"
-        State[State<br/>状态管理]
-        Checkpoint[Checkpoint<br/>检查点机制]
+    subgraph State["State Management"]
+        direction TB
+        StateDescriptor["State Descriptor<br/>ValueState<br/>MapState<br/>ListState"]
+        Checkpoint["Checkpoint<br/>Barrier<br/>Snapshot<br/>Recovery"]
     end
     
-    Source --> Job
-    Operator --> Job
-    Sink --> Job
-    
-    Job --> StreamGraph
-    StreamGraph --> JobGraph
-    
-    Operator --> State
-    State --> Checkpoint
+    Job --> Components
+    S --> O
+    O --> K
+    O --> StateDescriptor
+    StateDescriptor --> Checkpoint
 ```
 
-### 2.2 核心概念对照表
+**关系说明**：
 
-| 概念 | 定义 | Flink对应 | 关键能力 |
-|------|------|-----------|---------|
-| **Source** | 数据源抽象 | SourceFunction | run()发射数据、snapshotState()保存状态、restoreState()恢复 |
-| **Operator** | 算子抽象 | StreamOperator | processElement()处理数据、支持有状态/无状态 |
-| **Sink** | 输出抽象 | SinkFunction | invoke()写入数据、支持两阶段提交 |
-| **Job** | 任务定义 | StreamGraph | 包含Source、Operator链、Sink的完整定义 |
-| **StreamGraph** | 逻辑执行图 | StreamGraph | 用户定义的算子拓扑，一对一映射 |
-| **JobGraph** | 物理执行图 | JobGraph | 优化后的执行计划，应用算子链 |
-| **State** | 状态管理 | State/StateBackend | ValueState、MapState、ListState |
-| **Checkpoint** | 检查点 | Checkpoint | Barrier机制、一致性快照 |
+- **Job**：由配置（名称、并行度、Checkpoint间隔）和数据流定义（Source → Operator → Sink）组成
+- **Source**：数据源抽象，负责产生数据流，支持状态快照和恢复
+- **Operator**：数据处理算子，可以是无状态（Map/Filter）或有状态（Window/Aggregate）
+- **Sink**：数据输出抽象，负责将处理结果写入外部系统
+- **State**：Operator 可以关联状态，状态通过 Checkpoint 机制持久化
 
----
+### 3.2 Source 设计
 
-## 3. 核心抽象设计
-
-### 3.1 Source（数据源抽象）
-
-#### 3.1.1 设计目标
-
-**为什么需要 Source 抽象**：
-- 统一不同数据源的接口（Kafka、HTTP、JDBC、文件等）
-- 支持 Checkpoint 和状态恢复
-- 集成到 Reactor 的响应式流
-
-**设计难点**：
-- 如何设计通用接口适配各种数据源？
-- 如何在发射数据的同时支持 Checkpoint？
-- 如何处理背压（Source 产生速度 > 下游处理速度）？
-
-#### 3.1.2 接口设计
-
-**核心接口**：
+**接口定义**：
 
 ```java
-public interface Source<T, CheckpointState> {
-    // 运行Source，通过SourceContext发射数据
+public interface Source<T, CheckpointState extends Serializable> {
     void run(SourceContext<T> ctx) throws Exception;
-    
-    // 取消Source
     void cancel();
-    
-    // 保存Checkpoint状态（如Kafka offset、HTTP页码）
     CheckpointState snapshotState() throws Exception;
-    
-    // 从Checkpoint恢复状态
     void restoreState(CheckpointState state) throws Exception;
 }
 ```
 
-**设计要点**：
-- 使用 `SourceContext` 作为数据发射接口，隔离 Source 和框架
-- `snapshotState()` 返回可序列化的状态对象
-- `restoreState()` 在启动时恢复到之前的位置
+**三种模式的 Source 实现**：
 
-#### 3.1.3 三种 Source 模式设计
+**（1）STREAMING - KafkaSource**
 
-**模式 1：流式 Source（STREAMING）**
+- **状态内容**：Topic 各分区的 offset
+- **运行机制**：持续 poll 消息，通过 SourceContext 发射数据
+- **恢复机制**：从 Checkpoint 保存的 offset 继续消费
 
-```mermaid
-graph LR
-    subgraph "Kafka Source"
-        Init[初始化Consumer] --> Subscribe[订阅Topic]
-        Subscribe --> Poll[持续poll数据]
-        Poll --> Emit[发射到SourceContext]
-        Emit --> Poll
-        
-        Checkpoint[Checkpoint触发] --> SaveOffset[保存当前offset]
-        SaveOffset --> Poll
-        
-        Recover[启动恢复] --> SeekOffset[seek到保存的offset]
-        SeekOffset --> Poll
-    end
-```
-
-**特点**：
-- 无限流，持续运行
-- 保存消费位置（Kafka offset、RabbitMQ delivery tag）
-- 恢复时从上次位置继续
-
-**状态内容**：
 ```json
 {
-  "source_type": "kafka",
   "offsets": {
-    "topic-1": {"partition-0": 12345, "partition-1": 23456}
+    "topic-1": {"0": 12345, "1": 23456}
   }
 }
 ```
 
-**模式 2：滚动翻页 Source（BATCH_ROLLER）**
+**（2）BATCH_ROLLER - HttpApiRollerSource**
 
-```mermaid
-graph LR
-    subgraph "HTTP API Roller Source"
-        Init[初始化] --> Page0[请求第0页]
-        Page0 --> Check1{有数据?}
-        Check1 -->|是| Emit1[发射数据]
-        Check1 -->|否| Finish[标记完成]
-        
-        Emit1 --> Next[currentPage++]
-        Next --> Page0
-        
-        Checkpoint[Checkpoint触发] --> SavePage[保存当前页码]
-        SavePage --> Next
-        
-        Recover[启动恢复] --> RestorePage[恢复到保存的页码]
-        RestorePage --> Page0
-    end
-```
+- **状态内容**：当前页码、页内偏移量
+- **运行机制**：自动翻页请求，直到返回空数据
+- **恢复机制**：从 Checkpoint 保存的页码继续翻页
 
-**特点**：
-- 有界流，自动翻页直到没有数据
-- 保存当前页码和页内偏移量
-- 恢复时从上次页码继续
-
-**状态内容**：
 ```json
 {
-  "source_type": "http_api_roller",
   "current_page": 123,
   "page_size": 1000,
   "last_item_id": "item_123456"
 }
 ```
 
-**模式 3：SQL 任务 Source（SQL_TASK）**
+**（3）SQL_TASK - JdbcQuerySource**
 
-```mermaid
-graph LR
-    subgraph "JDBC Query Source"
-        Init[初始化连接] --> Execute[执行SQL查询]
-        Execute --> SetFetch[设置fetchSize<br/>流式读取]
-        SetFetch --> Loop[循环读取ResultSet]
-        Loop --> Check{还有数据?}
-        Check -->|是| Emit[发射数据]
-        Check -->|否| Finish[标记完成]
-        Emit --> Loop
-        
-        Checkpoint[Checkpoint触发] --> SaveRows[保存已处理行数]
-        SaveRows --> Loop
-    end
-```
+- **状态内容**：已处理行数、最后处理的记录 ID
+- **运行机制**：执行 SQL，流式读取 ResultSet（设置 fetchSize 避免 OOM）
+- **恢复机制**：使用增量查询 `WHERE id > lastProcessedId`
 
-**特点**：
-- 执行复杂 SQL（多表 Join、聚合、分析）
-- 流式读取 ResultSet，避免 OOM
-- 查询完成后自动结束
-
-**设计难点**：
-- SQL 查询无法暂停和恢复（不像 Kafka 的 offset）
-- 解决方案：使用增量查询 `WHERE id > lastProcessedId`
-
-**状态内容**：
 ```json
 {
-  "source_type": "jdbc_query",
   "sql": "SELECT * FROM orders WHERE ...",
   "processed_rows": 1000000,
   "last_processed_id": 999999
 }
 ```
 
-#### 3.1.4 Source 集成到 Reactor
+**设计难点与解决方案**：
 
-**转换策略**：
+| 难点 | 解决方案 |
+|------|---------|
+| 如何适配不同数据源 | 定义通用接口，由具体实现适配（Kafka/HTTP/JDBC） |
+| 如何支持 Checkpoint | 抽象 snapshotState() 方法，由实现类保存必要的位置信息 |
+| 如何集成到 Reactor | 使用 Flux.create() 将 Source.run() 转换为 Flux |
+| SQL 无法暂停恢复 | 使用增量查询 + 记录最后处理位置的方式实现断点续传 |
 
+### 3.3 Operator 设计
+
+**Operator 分类**：
+
+| 类型 | 算子 | 是否有状态 | 是否打断算子链 |
+|------|------|-----------|--------------|
+| **转换算子** | Map, FlatMap | 否 | 否 |
+| **过滤算子** | Filter | 否 | 否 |
+| **分区算子** | KeyBy | 否 | **是**（需要重分区） |
+| **窗口算子** | Window | 是 | **是**（需要聚合） |
+| **聚合算子** | Reduce, Aggregate | 是 | 否 |
+
+**算子链优化**：
+
+将多个连续的无状态算子合并到一个任务中执行，避免：
+- 数据序列化/反序列化开销
+- 线程切换开销
+- 队列传输开销
+
+**示例**：
 ```
-Source.run() → Flux.create()
-```
+优化前：Source → Map → Filter → KeyBy → Window → Sink
+         (6个任务)
 
-**关键点**：
-- Source 在独立线程中运行
-- 通过 SourceContext 发射数据到 FluxSink
-- 支持背压：FluxSink 的 request(n) 控制 Source 拉取速度
-
----
-
-### 3.2 Operator（算子抽象）
-
-#### 3.2.1 设计目标
-
-**为什么需要 Operator 抽象**：
-- 统一数据转换接口
-- 支持算子链优化（多个算子合并执行）
-- 支持有状态算子（窗口、聚合、去重）
-
-**算子分类**：
-
-```mermaid
-graph TB
-    subgraph "无状态算子"
-        Map[Map<br/>一对一转换]
-        Filter[Filter<br/>过滤]
-        FlatMap[FlatMap<br/>一对多转换]
-    end
-    
-    subgraph "有状态算子-KeyedState"
-        Window[Window<br/>窗口聚合]
-        Reduce[Reduce<br/>增量聚合]
-        Aggregate[Aggregate<br/>自定义聚合]
-    end
-    
-    subgraph "有状态算子-OperatorState"
-        Union[Union<br/>流合并]
-        Broadcast[Broadcast<br/>广播]
-    end
-    
-    subgraph "特殊算子"
-        KeyBy[KeyBy<br/>分区<br/>打断算子链]
-        Process[Process<br/>底层API<br/>完全控制]
-    end
+优化后：[Source+Map+Filter] → KeyBy → [Window+Sink]
+        (3个任务)
 ```
 
-#### 3.2.2 接口设计
+**性能提升**：吞吐量提升 3-5 倍
 
-**核心接口**：
-
-```java
-public interface StreamOperator<IN, OUT> {
-    // 处理一条数据
-    void processElement(IN value, OperatorContext<OUT> ctx);
-    
-    // 初始化算子（创建状态等）
-    void open() throws Exception;
-    
-    // 关闭算子（清理资源）
-    void close() throws Exception;
-    
-    // 保存状态快照
-    void snapshotState(StateSnapshotContext context);
-    
-    // 恢复状态
-    void initializeState(StateInitializationContext context);
-}
-```
-
-#### 3.2.3 算子链优化
-
-**什么是算子链**：
-
-将多个算子合并到一个执行任务中，避免数据序列化和线程切换开销。
-
-**算子链条件**：
-
-```mermaid
-graph TB
-    subgraph "可以链化"
-        C1[条件1: 相同并行度]
-        C2[条件2: 无状态算子或状态不需要重分区]
-        C3[条件3: 无KeyBy等分区操作]
-        C4[条件4: 单一输入输出]
-    end
-    
-    subgraph "不能链化"
-        N1[KeyBy操作<br/>需要重分区]
-        N2[Window操作<br/>需要聚合]
-        N3[并行度改变]
-        N4[多输入输出]
-    end
-    
-    subgraph "优化示例"
-        Before["优化前:<br/>Source → Map → Filter → KeyBy → Window → Sink"]
-        After["优化后:<br/>[Source+Map+Filter] → KeyBy → [Window+Sink]"]
-        
-        Before --> After
-    end
-```
-
-**性能提升**：
-- 减少数据序列化：0 次（算子链内直接方法调用）
-- 减少线程切换：0 次（单线程执行）
-- 提升吞吐量：3-5 倍
-
----
-
-### 3.3 Sink（输出抽象）
-
-#### 3.3.1 设计目标
-
-**为什么需要 Sink 抽象**：
-- 统一不同输出目标的接口
-- 支持批量写入优化
-- 支持 Exactly-Once 语义（两阶段提交）
-
-#### 3.3.2 接口设计
+### 3.4 Sink 设计
 
 **基础接口**：
 
 ```java
 public interface SinkFunction<T> {
-    // 写入一条数据
     void invoke(T value, SinkContext context) throws Exception;
-    
-    // 批量刷新
     void flush() throws Exception;
 }
 ```
@@ -429,370 +294,50 @@ public interface SinkFunction<T> {
 
 ```java
 public interface TwoPhaseCommitSinkFunction<T, TXN> extends SinkFunction<T> {
-    // 开始新事务
     TXN beginTransaction();
-    
-    // 在事务中写入数据
     void invoke(TXN transaction, T value);
-    
-    // 预提交（Checkpoint时调用）
-    void preCommit(TXN transaction);
-    
-    // 提交事务（Checkpoint完成后调用）
-    void commit(TXN transaction);
-    
-    // 回滚事务（Checkpoint失败时调用）
-    void abort(TXN transaction);
+    void preCommit(TXN transaction);   // Checkpoint 时调用
+    void commit(TXN transaction);      // Checkpoint 完成后调用
+    void abort(TXN transaction);       // Checkpoint 失败时调用
 }
 ```
 
-#### 3.3.3 两阶段提交流程
+**Exactly-Once 语义保证**：
 
-```mermaid
-sequenceDiagram
-    participant Coordinator as Checkpoint Coordinator
-    participant Source as Source
-    participant Operator as Operator
-    participant Sink as Sink
-    participant Storage as 外部存储
-    
-    Note over Coordinator,Storage: 阶段1: Pre-commit
-    
-    Coordinator->>Source: 触发Checkpoint(id=123)
-    Source->>Source: 保存状态(offset)
-    Source-->>Coordinator: Pre-commit成功
-    
-    Coordinator->>Operator: Checkpoint(id=123)
-    Operator->>Operator: 保存状态(window数据)
-    Operator-->>Coordinator: Pre-commit成功
-    
-    Coordinator->>Sink: Checkpoint(id=123)
-    Sink->>Sink: preCommit(transaction)
-    Note right of Sink: 数据写入临时位置<br/>但不真正提交
-    Sink-->>Coordinator: Pre-commit成功
-    
-    Note over Coordinator,Storage: 阶段2: Commit
-    
-    Coordinator->>Coordinator: 检查所有算子都成功
-    Coordinator->>Sink: Commit(id=123)
-    Sink->>Storage: commit(transaction)
-    Note right of Storage: 临时数据变为正式数据<br/>对外可见
-    Sink-->>Coordinator: Commit完成
-    
-    Note over Coordinator,Storage: 异常处理
-    
-    Coordinator->>Coordinator: 检测到Pre-commit失败
-    Coordinator->>Sink: Abort(id=123)
-    Sink->>Storage: rollback(transaction)
-    Note right of Storage: 删除临时数据
-```
-
-**Exactly-Once 保证**：
-- 所有算子的状态快照对应同一时刻
-- 只有所有算子都 Pre-commit 成功，才真正 Commit
-- 任何一个失败，全部 Abort
+通过两阶段提交协议，确保 Sink 的写入与 Checkpoint 的完成是原子性的：
+1. **Pre-commit 阶段**：所有算子保存状态，Sink 将数据写入临时位置
+2. **Commit 阶段**：所有算子都成功后，Sink 真正提交数据
+3. **Abort 阶段**：任何算子失败，Sink 回滚临时数据
 
 ---
 
-### 3.4 Job（任务定义）
+## 4. 执行模型
 
-#### 3.4.1 Job 组成
-
-```mermaid
-graph LR
-    subgraph "Job定义"
-        Config[Job配置<br/>名称/并行度<br/>Checkpoint间隔]
-        Source[Source<br/>数据源]
-        Op1[Operator 1<br/>Map]
-        Op2[Operator 2<br/>Filter]
-        Op3[Operator 3<br/>Window]
-        Sink[Sink<br/>输出]
-    end
-    
-    Config -.配置.-> Source
-    Config -.配置.-> Op1
-    Config -.配置.-> Sink
-    
-    Source --> Op1 --> Op2 --> Op3 --> Sink
-```
-
-#### 3.4.2 API 设计示例
-
-**流式任务**：
-```java
-StreamJob.builder()
-    .name("realtime-alert")
-    .source(new KafkaSource<>("events"))
-    .map(event -> parse(event))
-    .filter(event -> event.isValid())
-    .keyBy(event -> event.getUserId())
-    .window(TumblingTimeWindows.of(Duration.ofMinutes(5)))
-    .reduce((a, b) -> merge(a, b))
-    .sink(new KafkaSink<>("alerts"))
-    .config(checkpointInterval(Duration.ofMinutes(1)))
-    .build();
-```
-
-**滚动翻页任务**：
-```java
-StreamJob.builder()
-    .name("user-sync")
-    .source(new HttpApiRollerSource<>("https://api/users", pageSize=1000))
-    .map(user -> enrich(user))
-    .filter(user -> user.isActive())
-    .sink(new JdbcBatchSink<>("INSERT INTO users..."))
-    .build();
-```
-
-**SQL 任务**：
-```java
-StreamJob.builder()
-    .name("order-report")
-    .source(new JdbcQuerySource<>("""
-        SELECT u.user_id, COUNT(*) as cnt, SUM(o.amount) as total
-        FROM users u JOIN orders o ON u.id = o.user_id
-        WHERE u.create_time >= '2024-01-01'
-        GROUP BY u.user_id
-        """))
-    .map(row -> format(row))
-    .sink(new FileSink<>("/output/report.csv"))
-    .build();
-```
-
----
-
-### 3.5 StreamGraph 和 JobGraph
-
-#### 3.5.1 StreamGraph（逻辑执行图）
-
-**定义**：用户定义的算子拓扑的直接映射
-
-**示例**：
-```
-用户代码: source.map().filter().keyBy().window().reduce().sink()
-
-StreamGraph:
-Node[1]: KafkaSource
-  ↓
-Node[2]: MapOperator
-  ↓
-Node[3]: FilterOperator
-  ↓
-Node[4]: KeyByOperator
-  ↓
-Node[5]: WindowOperator
-  ↓
-Node[6]: ReduceOperator
-  ↓
-Node[7]: KafkaSink
-```
-
-#### 3.5.2 JobGraph（物理执行图）
-
-**定义**：应用算子链优化后的执行计划
-
-```mermaid
-graph TB
-    subgraph "StreamGraph到JobGraph转换"
-        SG["StreamGraph<br/>7个节点"]
-        JG["JobGraph<br/>3个节点(算子链)"]
-        
-        SG --> Optimize[算子链优化]
-        Optimize --> JG
-    end
-    
-    subgraph "JobGraph结构"
-        Chain1["JobVertex-1<br/>OperatorChain<br/>Source+Map+Filter"]
-        Vertex2["JobVertex-2<br/>KeyBy<br/>(不能链化)"]
-        Chain2["JobVertex-3<br/>OperatorChain<br/>Window+Reduce+Sink"]
-        
-        Chain1 --> Vertex2
-        Vertex2 --> Chain2
-    end
-```
-
-**优化效果**：
-- 节点数：7 → 3
-- 数据传输次数：6 → 2
-- 性能提升：3-5 倍
-
----
-
-### 3.6 State（状态管理）
-
-#### 3.6.1 状态类型
-
-```mermaid
-graph TB
-    subgraph "状态分类"
-        KeyedState[Keyed State<br/>按Key分区<br/>用于KeyedStream]
-        OperatorState[Operator State<br/>算子级别<br/>用于非Keyed操作]
-    end
-    
-    subgraph "Keyed State类型"
-        ValueState[ValueState<br/>单个值<br/>如: 用户累计金额]
-        MapState[MapState<br/>键值对<br/>如: 用户多维度统计]
-        ListState[ListState<br/>列表<br/>如: 最近N条记录]
-    end
-    
-    subgraph "存储后端"
-        Memory[Memory Backend<br/>HashMap<br/>快速但易丢失]
-        RocksDB[RocksDB Backend<br/>磁盘存储<br/>支持大状态]
-    end
-    
-    subgraph "选择策略"
-        Decision{状态大小}
-        Decision -->|< 10MB| Memory
-        Decision -->|> 10MB| RocksDB
-    end
-    
-    KeyedState --> ValueState
-    KeyedState --> MapState
-    KeyedState --> ListState
-    
-    ValueState --> Decision
-    MapState --> Decision
-    ListState --> Decision
-```
-
-#### 3.6.2 接口设计
-
-**ValueState**：
-```java
-public interface ValueState<T> {
-    T value();                  // 获取值
-    void update(T value);       // 更新值
-    void clear();              // 清除
-}
-```
-
-**MapState**：
-```java
-public interface MapState<K, V> {
-    V get(K key);                        // 获取
-    void put(K key, V value);            // 放入
-    void remove(K key);                  // 删除
-    Iterable<Entry<K, V>> entries();     // 遍历
-}
-```
-
----
-
-### 3.7 Checkpoint（检查点机制）
-
-#### 3.7.1 Barrier 机制
-
-**核心思想**：在数据流中插入 Barrier 标记，标记 Checkpoint 的边界
-
-```mermaid
-graph TB
-    subgraph "Barrier流动"
-        S1[Source收到触发] --> S2[保存状态<br/>Kafka offset]
-        S2 --> S3[插入Barrier到数据流]
-        S3 --> O1[Operator收到Barrier]
-        O1 --> O2[保存状态<br/>Window数据]
-        O2 --> O3[向下游传播Barrier]
-        O3 --> K1[Sink收到Barrier]
-        K1 --> K2[保存状态<br/>已写入位置]
-        K2 --> K3[通知Checkpoint完成]
-    end
-    
-    subgraph "数据流"
-        Data1[数据...] --> B1[Barrier-123]
-        B1 --> Data2[数据...]
-        Data2 --> B2[Barrier-124]
-        B2 --> Data3[数据...]
-    end
-```
-
-#### 3.7.2 一致性保证
-
-**Checkpoint 的一致性**：
-
-```mermaid
-sequenceDiagram
-    participant Coordinator
-    participant Source
-    participant Operator
-    participant Sink
-    participant Storage
-    
-    Note over Coordinator,Storage: 时刻T0: 触发Checkpoint
-    
-    Coordinator->>Source: trigger(checkpoint-123)
-    Source->>Source: 保存offset=1000
-    Source->>Operator: 发送Barrier-123
-    
-    Note over Operator: Barrier之前的数据对应offset<1000<br/>Barrier之后的数据对应offset>=1000
-    
-    Operator->>Operator: 保存状态(window数据)
-    Operator->>Sink: 发送Barrier-123
-    
-    Sink->>Sink: 保存已写入位置
-    Sink->>Coordinator: notifyComplete(123)
-    
-    Coordinator->>Storage: 持久化所有状态
-    Storage-->>Coordinator: 持久化完成
-    
-    Note over Coordinator,Storage: Checkpoint-123完成<br/>所有状态对应同一时刻T0
-```
-
-**故障恢复**：
-
-```mermaid
-graph TB
-    Start[Job启动] --> Check{有Checkpoint?}
-    Check -->|无| Fresh[从头开始]
-    Check -->|有| Load[加载最新Checkpoint-123]
-    
-    Load --> RestoreSource[Source恢复<br/>Kafka seek到offset=1000]
-    RestoreSource --> RestoreOp[Operator恢复<br/>恢复window数据]
-    RestoreOp --> RestoreSink[Sink恢复<br/>恢复已写入位置]
-    
-    RestoreSink --> Resume[从断点继续]
-    Fresh --> Run[开始执行]
-    Resume --> Run
-```
-
----
-
-## 4. 执行流程设计
-
-### 4.1 Job 状态机
+### 4.1 Job 生命周期
 
 ```mermaid
 stateDiagram-v2
-    [*] --> REGISTERED: 注册Job
+    [*] --> CREATED: create job
+    CREATED --> SCHEDULED: trigger
+    SCHEDULED --> INITIALIZING: allocate resource
     
-    REGISTERED --> SCHEDULED: 触发条件满足<br/>(Cron/手动/事件)
+    INITIALIZING --> RESTORING: has checkpoint
+    INITIALIZING --> RUNNING: no checkpoint
+    RESTORING --> RUNNING: restore complete
+    INITIALIZING --> FAILED: init failed
     
-    SCHEDULED --> INITIALIZING: 分配资源<br/>开始初始化
+    RUNNING --> CHECKPOINTING: trigger checkpoint
+    CHECKPOINTING --> RUNNING: checkpoint success
+    CHECKPOINTING --> RUNNING: checkpoint failed (retry)
     
-    INITIALIZING --> INIT_SOURCE: 初始化Source
-    INIT_SOURCE --> INIT_OPERATOR: 初始化Operator链
-    INIT_OPERATOR --> INIT_SINK: 初始化Sink
-    INIT_SINK --> RESTORE: 检查Checkpoint
+    RUNNING --> COMPLETED: data exhausted
+    RUNNING --> FAILED: exception
+    RUNNING --> CANCELLING: cancel signal
     
-    RESTORE --> RUNNING: 恢复完成<br/>开始执行
-    INIT_SOURCE --> FAILED: 初始化失败<br/>(连接失败)
-    INIT_OPERATOR --> FAILED: 初始化失败<br/>(状态加载失败)
-    INIT_SINK --> FAILED: 初始化失败<br/>(无法连接)
+    CANCELLING --> CANCELLED: graceful stop
     
-    RUNNING --> CHECKPOINTING: 触发Checkpoint
-    CHECKPOINTING --> RUNNING: Checkpoint成功
-    CHECKPOINTING --> CHECKPOINT_FAILED: Checkpoint失败
-    CHECKPOINT_FAILED --> RUNNING: 继续运行<br/>(非致命错误)
-    CHECKPOINT_FAILED --> FAILED: 连续失败<br/>(超过阈值)
-    
-    RUNNING --> COMPLETED: 执行完成<br/>(批量任务)
-    RUNNING --> FAILED: 执行异常
-    RUNNING --> CANCELLING: 收到取消信号
-    
-    CANCELLING --> CANCELLED: 优雅停止成功<br/>(30秒内)
-    CANCELLING --> CANCELLED: 强制终止<br/>(超时)
-    
-    FAILED --> SCHEDULED: 重试<br/>(未达最大次数)
-    FAILED --> DEAD: 放弃<br/>(达到最大次数)
+    FAILED --> SCHEDULED: retry
+    FAILED --> DEAD: max retries
     
     COMPLETED --> [*]
     CANCELLED --> [*]
@@ -801,436 +346,268 @@ stateDiagram-v2
 
 **状态说明**：
 
-| 状态 | 说明 | 可转换状态 |
-|------|------|-----------|
-| REGISTERED | Job已注册但未调度 | SCHEDULED |
-| SCHEDULED | Job已调度，等待执行 | INITIALIZING |
-| INITIALIZING | 正在初始化组件 | RUNNING, FAILED |
-| RUNNING | Job正在执行 | CHECKPOINTING, COMPLETED, FAILED, CANCELLING |
-| CHECKPOINTING | 正在执行Checkpoint | RUNNING, CHECKPOINT_FAILED |
-| CHECKPOINT_FAILED | Checkpoint失败 | RUNNING, FAILED |
-| COMPLETED | 执行完成 | 终态 |
-| FAILED | 执行失败 | SCHEDULED, DEAD |
-| CANCELLING | 正在取消 | CANCELLED |
-| CANCELLED | 已取消 | 终态 |
-| DEAD | 彻底失败 | 终态 |
+| 状态 | 含义 | 停留时长 |
+|------|------|---------|
+| **CREATED** | Job 已定义但未调度 | 长期（等待触发） |
+| **SCHEDULED** | 已触发，等待资源分配 | 秒级 |
+| **INITIALIZING** | 正在初始化 Source/Operator/Sink | 秒级 |
+| **RESTORING** | 正在从 Checkpoint 恢复状态 | 秒级~分钟级 |
+| **RUNNING** | 正常运行 | 长期（STREAMING）或短期（BATCH） |
+| **CHECKPOINTING** | 正在执行 Checkpoint | 秒级 |
+| **COMPLETED** | 执行完成（批量任务） | 终态 |
+| **FAILED** | 执行失败 | 中间态（等待重试） |
+| **CANCELLING** | 正在取消 | 秒级（30秒超时强制终止） |
+| **CANCELLED** | 已取消 | 终态 |
+| **DEAD** | 重试次数耗尽，彻底失败 | 终态 |
 
-### 4.2 Job 执行时序图
+### 4.2 执行流程
 
-```mermaid
-sequenceDiagram
-    participant Scheduler as Job Scheduler
-    participant Executor as Job Executor
-    participant Source as Source
-    participant Operator as Operator Chain
-    participant Sink as Sink
-    participant Checkpoint as Checkpoint Manager
+**从 Job 定义到执行的完整流程**：
+
+1. **定义阶段**：用户通过 API 定义 Job（Source/Operator/Sink）
+2. **构建 StreamGraph**：一对一映射用户定义的算子
+3. **优化 JobGraph**：应用算子链优化，生成物理执行计划
+4. **调度触发**：Scheduler 根据调度配置触发执行
+5. **初始化**：Executor 创建 Source/Operator/Sink 实例，调用 open() 方法
+6. **恢复状态**：如果存在 Checkpoint，调用 restoreState() 恢复
+7. **执行**：Reactor Engine 启动数据流处理
+   - Source 产生数据 → Flux
+   - Operator 处理数据 → transform
+   - Sink 写入数据 → subscribe
+8. **Checkpoint**：Coordinator 定期触发 Checkpoint
+   - 发送 Barrier 标记
+   - 各算子保存状态
+   - 持久化到 S3
+9. **完成/失败**：Job 结束，清理资源
+
+### 4.3 Reactor 集成与背压
+
+**Source → Reactor Flux 转换**：
+
+```java
+// Source.run() 在独立线程中运行
+Flux<T> flux = Flux.create(sink -> {
+    SourceContext<T> ctx = new SourceContext<T>() {
+        public void collect(T value) {
+            sink.next(value);  // 发射数据到 Flux
+        }
+    };
     
-    Note over Scheduler,Checkpoint: 阶段1: 初始化
-    
-    Scheduler->>Executor: submit(jobName, executionId)
-    Executor->>Executor: 创建执行记录<br/>状态: INITIALIZING
-    
-    Executor->>Source: open()
-    Source-->>Executor: 初始化成功
-    
-    Executor->>Operator: open()
-    Operator-->>Executor: 初始化成功
-    
-    Executor->>Sink: open()
-    Sink-->>Executor: 初始化成功
-    
-    Note over Scheduler,Checkpoint: 阶段2: 恢复(如果有Checkpoint)
-    
-    Executor->>Checkpoint: getLatestCheckpoint(executionId)
-    Checkpoint-->>Executor: checkpoint-123
-    
-    Executor->>Source: restoreState(checkpoint)
-    Executor->>Operator: initializeState(checkpoint)
-    Executor->>Sink: restoreState(checkpoint)
-    
-    Note over Scheduler,Checkpoint: 阶段3: 执行
-    
-    Executor->>Executor: 更新状态: RUNNING
-    
-    Executor->>Source: run(sourceContext)
-    activate Source
-    
-    loop 持续产生数据
-        Source->>Operator: processElement(value)
-        Operator->>Operator: map/filter/transform
-        Operator->>Sink: collect(result)
-        Sink->>Sink: 批量写入
-    end
-    
-    Note over Scheduler,Checkpoint: 阶段4: Checkpoint(周期性)
-    
-    Checkpoint->>Source: snapshotState()
-    Source-->>Checkpoint: offset=1000
-    
-    Checkpoint->>Operator: snapshotState()
-    Operator-->>Checkpoint: window数据
-    
-    Checkpoint->>Sink: snapshotState()
-    Sink-->>Checkpoint: 已写入位置
-    
-    Checkpoint->>Checkpoint: 持久化到S3
-    
-    Note over Scheduler,Checkpoint: 阶段5: 完成
-    
-    Source->>Source: 数据处理完<br/>(批量任务)
-    deactivate Source
-    
-    Executor->>Sink: close()
-    Executor->>Operator: close()
-    Executor->>Source: close()
-    
-    Executor->>Executor: 更新状态: COMPLETED
+    // 处理背压：只有下游 request(n) 时才拉取数据
+    sink.onRequest(n -> {
+        source.run(ctx);
+    });
+}, FluxSink.OverflowStrategy.BUFFER);
 ```
 
-### 4.3 三种模式的执行差异
+**背压策略**：
 
-```mermaid
-graph TB
-    subgraph "STREAMING模式"
-        S1[启动] --> S2[Source持续消费]
-        S2 --> S3[Operator持续处理]
-        S3 --> S4[Sink持续写入]
-        S4 --> S2
-        
-        S5[定期Checkpoint<br/>每1分钟] --> S2
-        
-        S6[手动停止或异常] --> S7[结束]
-    end
-    
-    subgraph "BATCH_ROLLER模式"
-        B1[启动] --> B2[请求第N页]
-        B2 --> B3{有数据?}
-        B3 -->|是| B4[处理并写入]
-        B4 --> B5[N++]
-        B5 --> B2
-        B3 -->|否| B6[自动结束]
-        
-        B7[每页完成后Checkpoint] --> B5
-    end
-    
-    subgraph "SQL_TASK模式"
-        Q1[启动] --> Q2[执行SQL查询]
-        Q2 --> Q3[流式读取ResultSet]
-        Q3 --> Q4[处理并写入]
-        Q4 --> Q5{还有数据?}
-        Q5 -->|是| Q3
-        Q5 -->|否| Q6[自动结束]
-        
-        Q7[每N行Checkpoint] --> Q3
-    end
+| 策略 | 行为 | 适用场景 |
+|------|------|---------|
+| **BUFFER** | 缓冲所有数据 | 短时背压，内存充足 |
+| **DROP** | 丢弃最新数据 | 允许丢失，保证实时性 |
+| **LATEST** | 只保留最新一条 | 状态更新场景 |
+| **ERROR** | 抛出异常 | 严格保证数据完整性 |
+
+**背压优势**：
+
 ```
+无背压控制：
+Source (1000条/秒) → Buffer (持续增长) → Sink (100条/秒) → OOM
+
+Reactor 背压：
+Source (100条/秒) ← request(100) ← Sink (100条/秒) → 稳定运行
+```
+
+Reactor 的 `request(n)` 机制自动调节 Source 的产生速度，无需手动实现。
 
 ---
 
-## 5. 背压机制设计
+## 5. 状态与容错
 
-### 5.1 背压问题
+### 5.1 State Backend
 
-**问题描述**：
+**状态类型**：
 
-```mermaid
-graph LR
-    subgraph "无背压控制"
-        FastSource[Source<br/>产生速度: 1000条/秒]
-        SlowSink[Sink<br/>写入速度: 100条/秒]
-        
-        FastSource -->|堆积| Buffer[内存缓冲区<br/>持续增长]
-        Buffer -->|最终| OOM[内存溢出<br/>OOM]
-        
-        FastSource -.速度不匹配.-> SlowSink
-    end
-```
+| 类型 | 使用场景 | 示例 |
+|------|---------|------|
+| **ValueState** | 存储单个值 | 用户累计金额 |
+| **MapState** | 存储键值对 | 用户多维度统计 |
+| **ListState** | 存储列表 | 最近N条记录 |
 
-**传统解决方案的问题**：
-- 手动实现队列和信号量：复杂、容易出错
-- 固定大小缓冲区：要么溢出要么阻塞
-- 丢弃数据：不能保证数据完整性
+**存储后端选择**：
 
-### 5.2 Reactor 背压优势
+| 后端 | 实现 | 适用场景 | 优缺点 |
+|------|------|---------|--------|
+| **Memory** | HashMap | 状态 < 10MB | 快速但易丢失 |
+| **RocksDB** | 磁盘存储 | 状态 > 10MB | 支持大状态，略慢 |
 
-**Reactor 的天然背压支持**：
+### 5.2 Checkpoint 机制
 
 ```mermaid
 sequenceDiagram
-    participant Source as Source<br/>(Flux.create)
-    participant Buffer as 缓冲区
-    participant Operator as Operator<br/>(transform)
-    participant Sink as Sink<br/>(subscribe)
+    participant Coordinator
+    participant Source
+    participant Operator
+    participant Sink
+    participant S3
     
-    Note over Source,Sink: 阶段1: 订阅时建立背压链路
+    Note over Coordinator: t=0: trigger checkpoint-123
     
-    Sink->>Operator: subscribe()
-    Operator->>Buffer: subscribe()
-    Buffer->>Source: subscribe()
+    Coordinator->>Source: trigger(123)
+    Source->>Source: save offset=1000
+    Source->>Operator: send barrier-123
     
-    Note over Source,Sink: 阶段2: Sink发起请求
+    Note over Operator: barrier前数据 offset<1000<br/>barrier后数据 offset>=1000
     
-    Sink->>Operator: request(10)
-    Note right of Sink: 我准备好处理10条数据
+    Operator->>Operator: save window state
+    Operator->>Sink: send barrier-123
     
-    Operator->>Buffer: request(10)
-    Buffer->>Source: request(10)
-    Note right of Source: Source收到请求，拉取10条
+    Sink->>Sink: preCommit
+    Sink->>Coordinator: notify complete
     
-    Note over Source,Sink: 阶段3: 数据流动
+    Coordinator->>S3: persist all states
+    S3-->>Coordinator: success
     
-    Source->>Buffer: onNext(data1...data10)
-    Buffer->>Operator: onNext(data1...data10)
-    Operator->>Sink: onNext(result1...result10)
+    Coordinator->>Sink: commit
     
-    Note over Source,Sink: 阶段4: Sink处理完成
-    
-    Sink->>Sink: 写入数据库(10条)
-    
-    Note over Source,Sink: 阶段5: 继续请求
-    
-    Sink->>Operator: request(10)
-    Note right of Sink: 继续请求下一批
-    
-    Operator->>Source: request(10)
+    Note over Coordinator,S3: checkpoint-123 complete<br/>all states at t=0
 ```
 
-**关键优势**：
+**Checkpoint 流程说明**：
 
-| 特性 | 手动实现 | Reactor 背压 |
-|------|---------|-------------|
-| 实现复杂度 | 需要手动管理队列、锁、信号量 | 开箱即用 |
-| 代码量 | 500+ 行 | 0 行（框架提供） |
-| 内存控制 | 需要手动限制缓冲区大小 | 自动控制，按需拉取 |
-| 性能 | 取决于实现质量 | 高度优化 |
-| 错误处理 | 容易出现死锁、内存泄漏 | 框架保证正确性 |
+1. **触发**：Coordinator 定期触发 Checkpoint（如每 1 分钟）
+2. **Barrier 注入**：在 Source 的数据流中插入 Barrier 标记
+3. **状态保存**：
+   - Source 保存当前消费位置（Kafka offset）
+   - Operator 保存窗口数据、聚合值
+   - Sink 调用 preCommit，写入临时位置
+4. **持久化**：Coordinator 将所有状态写入 S3
+5. **提交**：Coordinator 通知 Sink 调用 commit，数据对外可见
 
-### 5.3 背压策略对比
+**一致性保证**：
 
-```mermaid
-graph TB
-    subgraph "Source产生1000条/秒"
-        Source[Source]
-    end
-    
-    subgraph "BUFFER策略"
-        B1[缓冲所有数据]
-        B2[内存持续增长]
-        B3[可能OOM]
-        B1 --> B2 --> B3
-    end
-    
-    subgraph "DROP策略"
-        D1[丢弃最新数据]
-        D2[只保留Sink能处理的]
-        D3[数据丢失但内存稳定]
-        D1 --> D2 --> D3
-    end
-    
-    subgraph "LATEST策略"
-        L1[只保留最新一条]
-        L2[丢弃旧数据]
-        L3[适合状态更新场景]
-        L1 --> L2 --> L3
-    end
-    
-    subgraph "ERROR策略"
-        E1[抛出异常]
-        E2[任务失败]
-        E3[严格保证不丢数据]
-        E1 --> E2 --> E3
-    end
-    
-    subgraph "Sink处理100条/秒"
-        Sink[Sink]
-    end
-    
-    Source --> B1
-    Source --> D1
-    Source --> L1
-    Source --> E1
-    
-    B1 -.900条堆积.-> Sink
-    D1 -.900条丢弃.-> Sink
-    L1 -.999条丢弃.-> Sink
-    E1 -.抛异常.-> Sink
+- **Barrier 对齐**：确保 Checkpoint 的状态对应同一时刻
+- **原子性**：所有算子都成功才真正提交，任何一个失败则全部回滚
+- **恢复**：从最近的成功 Checkpoint 恢复，重放 Barrier 之后的数据
+
+### 5.3 故障恢复
+
+**恢复流程**：
+
+1. 检测到 Job 失败
+2. 查询最新的成功 Checkpoint
+3. 从 S3 加载状态快照
+4. 调用各算子的 restoreState()
+5. Source 从 Checkpoint 保存的位置继续（如 Kafka offset）
+6. 继续执行
+
+**恢复示例（STREAMING）**：
+
+```
+故障前：Kafka offset=1000，已处理到此位置
+Checkpoint：保存 offset=1000
+故障后：从 Checkpoint 恢复，Kafka seek 到 offset=1000，继续消费
 ```
 
-**策略选择指南**：
+**恢复示例（BATCH_ROLLER）**：
 
-| 场景 | 推荐策略 | 理由 |
-|------|---------|------|
-| 实时告警 | DROP | 允许丢失部分数据，保证实时性 |
-| 数据同步 | BUFFER | 不能丢数据，配合充足内存 |
-| 状态更新 | LATEST | 只关心最新状态 |
-| 金融交易 | ERROR | 严格保证数据完整性，失败重试 |
+```
+故障前：已处理 123 页
+Checkpoint：保存 current_page=123
+故障后：从第 123 页继续翻页
+```
 
-### 5.4 背压监控指标
+**恢复示例（SQL_TASK）**：
 
-```mermaid
-graph LR
-    subgraph "监控指标"
-        M1[缓冲区大小<br/>buffer_size]
-        M2[丢弃计数<br/>dropped_count]
-        M3[背压状态<br/>backpressure_active]
-        M4[请求速率<br/>request_rate]
-    end
-    
-    subgraph "告警规则"
-        A1[缓冲区 > 90%<br/>警告]
-        A2[持续背压 > 5分钟<br/>严重]
-        A3[丢弃率 > 10%<br/>警告]
-    end
-    
-    M1 --> A1
-    M3 --> A2
-    M2 --> A3
+```
+故障前：已处理 1000000 行，last_processed_id=999999
+Checkpoint：保存 last_processed_id=999999
+故障后：执行增量查询 WHERE id > 999999，继续处理
 ```
 
 ---
 
 ## 6. 数据库设计
 
-### 6.1 pipeline_job_definition（Job定义表）
+### 6.1 表结构
 
-**表结构**：
+**（1）pipeline_job_definition - Job 定义表**
 
 ```sql
 CREATE TABLE pipeline_job_definition (
     id                  BIGSERIAL PRIMARY KEY,
     job_name            VARCHAR(200) NOT NULL UNIQUE,
-    job_type            VARCHAR(50) NOT NULL,
+    job_type            VARCHAR(50) NOT NULL,        -- STREAMING/BATCH_ROLLER/SQL_TASK
     version             INTEGER NOT NULL DEFAULT 1,
-    dag_definition      TEXT NOT NULL,
+    dag_definition      TEXT NOT NULL,               -- JSON格式
     description         TEXT,
     enabled             BOOLEAN NOT NULL DEFAULT true,
     parallelism         INTEGER DEFAULT 1,
     max_retry_times     INTEGER DEFAULT 3,
     create_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_by          VARCHAR(100),
-    updated_by          VARCHAR(100),
-    
-    CONSTRAINT chk_parallelism CHECK (parallelism > 0),
-    CONSTRAINT chk_max_retry CHECK (max_retry_times >= 0)
+    update_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_job_name ON pipeline_job_definition(job_name);
 CREATE INDEX idx_job_type ON pipeline_job_definition(job_type);
-CREATE INDEX idx_enabled ON pipeline_job_definition(enabled);
-CREATE INDEX idx_update_time ON pipeline_job_definition(update_time DESC);
-
-COMMENT ON TABLE pipeline_job_definition IS 'Job定义表，存储Job的元数据';
-COMMENT ON COLUMN pipeline_job_definition.job_type IS 'STREAMING/BATCH_ROLLER/SQL_TASK';
-COMMENT ON COLUMN pipeline_job_definition.dag_definition IS 'Job的DAG定义，JSON格式';
-COMMENT ON COLUMN pipeline_job_definition.version IS '版本号，每次更新自增';
 ```
 
-**dag_definition JSON 示例**：
+**dag_definition 示例**：
 
 ```json
 {
-  "job_name": "realtime-alert",
-  "job_type": "STREAMING",
-  "source": {
-    "type": "kafka",
-    "config": {
-      "topic": "events",
-      "bootstrap.servers": "localhost:9092",
-      "group.id": "alert-group"
-    }
-  },
+  "source": {"type": "kafka", "config": {"topic": "events"}},
   "operators": [
     {"type": "map", "function": "parseEvent"},
-    {"type": "filter", "condition": "event.isValid()"},
-    {"type": "keyBy", "keySelector": "event.getUserId()"},
-    {"type": "window", "assigner": "tumbling", "size": "5 minutes"},
-    {"type": "reduce", "function": "count"}
+    {"type": "filter", "condition": "isValid"}
   ],
-  "sink": {
-    "type": "kafka",
-    "config": {
-      "topic": "alerts",
-      "bootstrap.servers": "localhost:9092"
-    }
-  },
-  "config": {
-    "checkpoint_interval": 60000,
-    "backpressure_strategy": "BUFFER"
-  }
+  "sink": {"type": "jdbc", "config": {"table": "results"}},
+  "checkpoint_interval": 60000
 }
 ```
 
-### 6.2 pipeline_job_execution（Job执行记录表）
+**（2）pipeline_job_execution - Job 执行记录表**
 
 ```sql
 CREATE TABLE pipeline_job_execution (
     id                  BIGSERIAL PRIMARY KEY,
     execution_id        VARCHAR(100) NOT NULL UNIQUE,
-    job_id              BIGINT NOT NULL,
+    job_id              BIGINT NOT NULL REFERENCES pipeline_job_definition(id),
     job_name            VARCHAR(200) NOT NULL,
-    status              VARCHAR(50) NOT NULL,
+    status              VARCHAR(50) NOT NULL,        -- CREATED/RUNNING/COMPLETED/FAILED等
     start_time          TIMESTAMP NOT NULL,
     end_time            TIMESTAMP,
-    duration_ms         BIGINT,
     processed_records   BIGINT DEFAULT 0,
     failed_records      BIGINT DEFAULT 0,
-    throughput          DECIMAL(10, 2),
+    throughput          DECIMAL(10, 2),              -- 吞吐量 (条/秒)
     error_message       TEXT,
-    error_stack_trace   TEXT,
-    checkpoint_path     VARCHAR(500),
-    retry_count         INTEGER DEFAULT 0,
-    triggered_by        VARCHAR(100),
-    instance_id         VARCHAR(100),
-    
-    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id) ON DELETE CASCADE,
-    CONSTRAINT chk_retry_count CHECK (retry_count >= 0)
+    retry_count         INTEGER DEFAULT 0
 );
 
 CREATE INDEX idx_execution_id ON pipeline_job_execution(execution_id);
 CREATE INDEX idx_job_id_start_time ON pipeline_job_execution(job_id, start_time DESC);
-CREATE INDEX idx_status ON pipeline_job_execution(status);
-CREATE INDEX idx_start_time ON pipeline_job_execution(start_time DESC);
-CREATE INDEX idx_instance_id ON pipeline_job_execution(instance_id);
-
-COMMENT ON TABLE pipeline_job_execution IS 'Job执行记录表';
-COMMENT ON COLUMN pipeline_job_execution.status IS 'REGISTERED/SCHEDULED/INITIALIZING/RUNNING/CHECKPOINTING/COMPLETED/FAILED/CANCELLING/CANCELLED/DEAD';
-COMMENT ON COLUMN pipeline_job_execution.throughput IS '吞吐量，记录/秒';
-COMMENT ON COLUMN pipeline_job_execution.instance_id IS '执行该Job的实例ID';
 ```
 
-### 6.3 pipeline_checkpoint（Checkpoint记录表）
+**（3）pipeline_checkpoint - Checkpoint 记录表**
 
 ```sql
 CREATE TABLE pipeline_checkpoint (
     id                  BIGSERIAL PRIMARY KEY,
-    execution_id        VARCHAR(100) NOT NULL,
+    execution_id        VARCHAR(100) NOT NULL REFERENCES pipeline_job_execution(execution_id),
     checkpoint_id       BIGINT NOT NULL,
-    checkpoint_type     VARCHAR(50) NOT NULL,
-    status              VARCHAR(50) NOT NULL,
-    state_data          JSONB NOT NULL,
-    storage_path        VARCHAR(500),
+    checkpoint_type     VARCHAR(50) NOT NULL,        -- STREAMING/BATCH_ROLLER/SQL_TASK
+    status              VARCHAR(50) NOT NULL,        -- SUCCESS/FAILED
+    state_data          JSONB NOT NULL,              -- 状态数据
+    storage_path        VARCHAR(500),                -- S3路径
     storage_size_bytes  BIGINT,
     create_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     complete_time       TIMESTAMP,
-    duration_ms         INTEGER,
-    is_savepoint        BOOLEAN DEFAULT false,
     
-    FOREIGN KEY (execution_id) REFERENCES pipeline_job_execution(execution_id) ON DELETE CASCADE,
-    UNIQUE (execution_id, checkpoint_id),
-    CONSTRAINT chk_storage_size CHECK (storage_size_bytes >= 0)
+    UNIQUE (execution_id, checkpoint_id)
 );
 
 CREATE INDEX idx_execution_checkpoint ON pipeline_checkpoint(execution_id, checkpoint_id DESC);
-CREATE INDEX idx_create_time ON pipeline_checkpoint(create_time DESC);
-CREATE INDEX idx_savepoint ON pipeline_checkpoint(is_savepoint) WHERE is_savepoint = true;
-CREATE INDEX idx_status ON pipeline_checkpoint(status);
-
-COMMENT ON TABLE pipeline_checkpoint IS 'Checkpoint记录表';
-COMMENT ON COLUMN pipeline_checkpoint.checkpoint_type IS 'STREAMING/BATCH_ROLLER/SQL_TASK';
-COMMENT ON COLUMN pipeline_checkpoint.state_data IS '状态数据，JSONB格式，包含Source/Operator/Sink的状态';
-COMMENT ON COLUMN pipeline_checkpoint.is_savepoint IS '是否为手动保存点，Savepoint不会被自动清理';
 ```
 
 **state_data 示例（STREAMING）**：
@@ -1241,312 +618,247 @@ COMMENT ON COLUMN pipeline_checkpoint.is_savepoint IS '是否为手动保存点�
   "timestamp": "2024-01-01T10:00:00",
   "source_state": {
     "type": "kafka",
-    "offsets": {
-      "events-topic": {
-        "0": 12345,
-        "1": 23456,
-        "2": 34567
-      }
-    }
+    "offsets": {"events-topic": {"0": 12345, "1": 23456}}
   },
   "operator_state": {
-    "window_operator_1": {
-      "windows": [
-        {
-          "key": "user_123",
-          "start": "2024-01-01T09:55:00",
-          "end": "2024-01-01T10:00:00",
-          "accumulator": {"count": 100, "sum": 5000}
-        }
-      ]
+    "window_operator": {
+      "windows": [{"key": "user_123", "count": 100}]
     }
   },
   "sink_state": {
-    "type": "kafka",
-    "transaction_id": "txn-123",
-    "committed_offset": 12000
+    "transaction_id": "txn-123"
   }
 }
 ```
 
-**state_data 示例（BATCH_ROLLER）**：
-
-```json
-{
-  "checkpoint_id": 45,
-  "timestamp": "2024-01-01T10:00:00",
-  "source_state": {
-    "type": "http_api_roller",
-    "current_page": 123,
-    "page_size": 1000,
-    "total_processed": 123000,
-    "last_item_id": "item_123456"
-  },
-  "sink_state": {
-    "type": "jdbc",
-    "batch_number": 123,
-    "rows_written": 123000
-  }
-}
-```
-
-**state_data 示例（SQL_TASK）**：
-
-```json
-{
-  "checkpoint_id": 10,
-  "timestamp": "2024-01-01T10:00:00",
-  "source_state": {
-    "type": "jdbc_query",
-    "sql": "SELECT * FROM orders WHERE ...",
-    "processed_rows": 1000000,
-    "last_processed_id": 999999,
-    "result_set_position": 1000000
-  },
-  "sink_state": {
-    "type": "file",
-    "file_path": "/output/report.csv",
-    "bytes_written": 52428800,
-    "rows_written": 1000000
-  }
-}
-```
-
-### 6.4 pipeline_job_config（Job配置表）
+**（4）pipeline_job_config - Job 配置表**
 
 ```sql
 CREATE TABLE pipeline_job_config (
     id              BIGSERIAL PRIMARY KEY,
-    job_id          BIGINT NOT NULL,
+    job_id          BIGINT NOT NULL REFERENCES pipeline_job_definition(id),
     config_key      VARCHAR(200) NOT NULL,
     config_value    TEXT NOT NULL,
-    config_type     VARCHAR(50) NOT NULL,
-    description     TEXT,
-    is_sensitive    BOOLEAN DEFAULT false,
-    create_time     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    config_type     VARCHAR(50) NOT NULL,           -- STRING/INT/BOOLEAN/JSON
+    is_sensitive    BOOLEAN DEFAULT false,          -- 是否敏感（密码等）
     
-    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id) ON DELETE CASCADE,
     UNIQUE (job_id, config_key)
 );
-
-CREATE INDEX idx_job_config ON pipeline_job_config(job_id);
-CREATE INDEX idx_config_key ON pipeline_job_config(config_key);
-
-COMMENT ON TABLE pipeline_job_config IS 'Job配置表，存储Job的运行时配置';
-COMMENT ON COLUMN pipeline_job_config.config_type IS 'STRING/INT/BOOLEAN/JSON';
-COMMENT ON COLUMN pipeline_job_config.is_sensitive IS '是否为敏感配置（如密码），需要加密存储';
 ```
 
-**常用配置项**：
+**常用配置**：
 
-| config_key | config_type | 说明 | 示例值 |
-|-----------|-------------|------|--------|
-| parallelism | INT | 并行度 | 4 |
-| checkpoint.interval | INT | Checkpoint间隔（毫秒） | 60000 |
-| checkpoint.retention | INT | 保留Checkpoint数量 | 10 |
-| checkpoint.timeout | INT | Checkpoint超时（毫秒） | 600000 |
-| backpressure.strategy | STRING | 背压策略 | BUFFER/DROP/LATEST/ERROR |
-| source.batch.size | INT | Source批量大小 | 100 |
-| sink.batch.size | INT | Sink批量大小 | 1000 |
-| sink.flush.interval | INT | Sink刷新间隔（毫秒） | 5000 |
-| max.retry.times | INT | 最大重试次数 | 3 |
-| retry.interval | INT | 重试间隔（毫秒） | 5000 |
+| config_key | 说明 | 示例值 |
+|-----------|------|--------|
+| checkpoint.interval | Checkpoint间隔（毫秒） | 60000 |
+| checkpoint.retention | 保留Checkpoint数量 | 10 |
+| backpressure.strategy | 背压策略 | BUFFER |
+| source.batch.size | Source批量大小 | 100 |
+| sink.batch.size | Sink批量大小 | 1000 |
 
-### 6.5 pipeline_job_schedule（Job调度配置表）
+**（5）pipeline_job_schedule - Job 调度配置表**
 
 ```sql
 CREATE TABLE pipeline_job_schedule (
     id                  BIGSERIAL PRIMARY KEY,
-    job_id              BIGINT NOT NULL,
-    schedule_type       VARCHAR(50) NOT NULL,
-    cron_expression     VARCHAR(100),
-    event_topic         VARCHAR(200),
-    dependencies        JSONB,
+    job_id              BIGINT NOT NULL UNIQUE REFERENCES pipeline_job_definition(id),
+    schedule_type       VARCHAR(50) NOT NULL,        -- CRON/MANUAL/EVENT
+    cron_expression     VARCHAR(100),                -- Cron表达式
     enabled             BOOLEAN NOT NULL DEFAULT true,
-    last_trigger_time   TIMESTAMP,
-    next_trigger_time   TIMESTAMP,
-    trigger_count       BIGINT DEFAULT 0,
-    create_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id) ON DELETE CASCADE,
-    UNIQUE (job_id)
+    next_trigger_time   TIMESTAMP
 );
-
-CREATE INDEX idx_schedule_job ON pipeline_job_schedule(job_id);
-CREATE INDEX idx_next_trigger ON pipeline_job_schedule(next_trigger_time) WHERE enabled = true;
-CREATE INDEX idx_schedule_type ON pipeline_job_schedule(schedule_type);
-
-COMMENT ON TABLE pipeline_job_schedule IS 'Job调度配置表';
-COMMENT ON COLUMN pipeline_job_schedule.schedule_type IS 'CRON/MANUAL/EVENT/DEPENDENCY';
-COMMENT ON COLUMN pipeline_job_schedule.dependencies IS '依赖的Job列表，JSON数组格式: ["job1", "job2"]';
 ```
 
-### 6.6 数据库 ER 图
+### 6.2 ER 图
 
 ```mermaid
 erDiagram
-    pipeline_job_definition ||--o{ pipeline_job_execution : "1:N 一个Job多次执行"
-    pipeline_job_definition ||--o{ pipeline_job_config : "1:N 一个Job多个配置"
-    pipeline_job_definition ||--o| pipeline_job_schedule : "1:1 一个Job一个调度"
-    pipeline_job_execution ||--o{ pipeline_checkpoint : "1:N 一次执行多个Checkpoint"
+    JOB_DEF ||--o{ JOB_EXEC : "1:N"
+    JOB_DEF ||--o{ JOB_CONFIG : "1:N"
+    JOB_DEF ||--o| JOB_SCHEDULE : "1:1"
+    JOB_EXEC ||--o{ CHECKPOINT : "1:N"
     
-    pipeline_job_definition {
+    JOB_DEF {
         bigint id PK
-        varchar job_name UK "唯一名称"
-        varchar job_type "STREAMING/BATCH_ROLLER/SQL_TASK"
-        int version "版本号"
-        text dag_definition "DAG定义JSON"
-        boolean enabled "是否启用"
-        int parallelism "并行度"
-        int max_retry_times "最大重试次数"
+        varchar job_name UK
+        varchar job_type
+        text dag_definition
+        int version
     }
     
-    pipeline_job_execution {
+    JOB_EXEC {
         bigint id PK
-        varchar execution_id UK "执行唯一ID"
+        varchar execution_id UK
         bigint job_id FK
-        varchar job_name "Job名称冗余"
-        varchar status "执行状态"
-        timestamp start_time "开始时间"
-        timestamp end_time "结束时间"
-        bigint processed_records "处理记录数"
-        bigint failed_records "失败记录数"
-        decimal throughput "吞吐量"
-        varchar instance_id "执行实例"
+        varchar status
+        timestamp start_time
+        bigint processed_records
     }
     
-    pipeline_checkpoint {
+    CHECKPOINT {
         bigint id PK
         varchar execution_id FK
-        bigint checkpoint_id "Checkpoint序号"
-        varchar checkpoint_type "类型"
-        varchar status "状态"
-        jsonb state_data "状态数据"
-        varchar storage_path "存储路径"
-        bigint storage_size_bytes "存储大小"
-        boolean is_savepoint "是否Savepoint"
+        bigint checkpoint_id
+        jsonb state_data
+        varchar storage_path
     }
     
-    pipeline_job_config {
+    JOB_CONFIG {
         bigint id PK
         bigint job_id FK
-        varchar config_key UK "配置键"
-        text config_value "配置值"
-        varchar config_type "类型"
-        boolean is_sensitive "是否敏感"
+        varchar config_key
+        text config_value
     }
     
-    pipeline_job_schedule {
+    JOB_SCHEDULE {
         bigint id PK
-        bigint job_id FK UK
-        varchar schedule_type "调度类型"
-        varchar cron_expression "Cron表达式"
-        jsonb dependencies "依赖Job"
-        timestamp next_trigger_time "下次触发时间"
+        bigint job_id FK
+        varchar schedule_type
+        varchar cron_expression
     }
 ```
+
+**关系说明**：
+
+- 一个 Job 定义可以有多次执行记录（1:N）
+- 一个 Job 定义可以有多个配置项（1:N）
+- 一个 Job 定义对应一个调度配置（1:1）
+- 一次执行可以有多个 Checkpoint（1:N）
 
 ---
 
-## 7. 部署架构
+## 7. 部署方案
 
-### 7.1 部署拓扑
+### 7.1 部署架构
 
 ```mermaid
 graph TB
-    subgraph "负载均衡层"
-        LB[Nginx/HAProxy<br/>负载均衡器]
-    end
-    
-    subgraph "应用层 - Kubernetes集群"
-        subgraph "Pipeline Namespace"
-            Pod1[Pipeline Instance 1<br/>运行 Job-A, Job-B]
-            Pod2[Pipeline Instance 2<br/>运行 Job-C, Job-D]
-            Pod3[Pipeline Instance 3<br/>运行 Job-E, Job-F]
-        end
+    subgraph K8S["Kubernetes Cluster"]
+        direction TB
+        Pod1["Pipeline Pod 1<br/>Job-A, Job-B"]
+        Pod2["Pipeline Pod 2<br/>Job-C, Job-D"]
+        Pod3["Pipeline Pod 3<br/>Job-E, Job-F"]
         
-        Service[Kubernetes Service<br/>服务发现]
-        
-        Pod1 --> Service
-        Pod2 --> Service
-        Pod3 --> Service
+        Service["K8S Service"]
     end
     
-    subgraph "存储层"
-        PG[(PostgreSQL<br/>元数据存储<br/>Job定义/执行记录)]
-        RDB[(RocksDB<br/>State Backend<br/>算子状态)]
-        S3[(S3/MinIO<br/>Checkpoint存储<br/>状态快照)]
+    subgraph Storage["Storage"]
+        direction TB
+        PG[("PostgreSQL<br/>Metadata")]
+        RDB[("RocksDB<br/>State")]
+        S3[("S3/MinIO<br/>Checkpoint")]
     end
     
-    subgraph "数据源层"
-        Kafka[(Kafka<br/>消息队列)]
-        MySQL[(MySQL<br/>关系数据库)]
-        API[HTTP APIs<br/>外部接口]
+    subgraph Monitor["Monitoring"]
+        direction TB
+        Prom["Prometheus"]
+        Graf["Grafana"]
     end
     
-    subgraph "监控层"
-        Prometheus[Prometheus<br/>指标采集]
-        Grafana[Grafana<br/>可视化]
-        Alert[Alertmanager<br/>告警]
-    end
-    
-    LB --> Service
+    Pod1 --> Service
+    Pod2 --> Service
+    Pod3 --> Service
     
     Pod1 --> PG
-    Pod2 --> PG
-    Pod3 --> PG
-    
     Pod1 --> RDB
-    Pod2 --> RDB
-    Pod3 --> RDB
-    
     Pod1 --> S3
+    
+    Pod2 --> PG
+    Pod2 --> RDB
     Pod2 --> S3
+    
+    Pod3 --> PG
+    Pod3 --> RDB
     Pod3 --> S3
     
-    Pod1 --> Kafka
-    Pod2 --> MySQL
-    Pod3 --> API
+    Pod1 --> Prom
+    Pod2 --> Prom
+    Pod3 --> Prom
     
-    Pod1 --> Prometheus
-    Pod2 --> Prometheus
-    Pod3 --> Prometheus
-    
-    Prometheus --> Grafana
-    Prometheus --> Alert
+    Prom --> Graf
 ```
+
+**部署说明**：
+
+- **Kubernetes 部署**：每个 Pipeline 实例作为一个 Pod 运行
+- **Job 分配**：每个 Pod 可以运行多个 Job（通过配置控制）
+- **无状态设计**：状态存储在外部（RocksDB/S3），Pod 可以随时重启
+- **自动伸缩**：根据 CPU/内存使用率自动扩缩容（HPA）
 
 ### 7.2 监控指标
 
 **关键指标**：
 
-| 指标类别 | 指标名称 | 说明 | 告警阈值 |
-|---------|---------|------|---------|
-| **Job指标** | job_execution_total | Job执行总次数 | - |
-| | job_execution_success | Job成功次数 | - |
-| | job_execution_failure | Job失败次数 | - |
-| | job_success_rate | Job成功率 | < 95% 告警 |
-| | job_duration_seconds | Job执行时长 | > 2倍平均值告警 |
-| **数据指标** | records_processed_total | 处理记录总数 | - |
-| | records_failed_total | 失败记录总数 | - |
-| | throughput | 吞吐量（条/秒） | < 正常值50% 告警 |
-| | latency_seconds | 处理延迟 | > 5秒告警 |
-| **Checkpoint指标** | checkpoint_total | Checkpoint总次数 | - |
-| | checkpoint_success_rate | Checkpoint成功率 | < 95% 告警 |
-| | checkpoint_duration_seconds | Checkpoint时长 | > 60秒告警 |
-| | checkpoint_state_size_bytes | 状态大小 | > 10GB 警告 |
-| **背压指标** | backpressure_active | 是否发生背压 | 持续5分钟告警 |
-| | buffer_size | 缓冲区大小 | > 90% 告警 |
-| | dropped_records | 丢弃记录数 | > 0 告警 |
-| **系统指标** | cpu_usage | CPU使用率 | > 80% 告警 |
-| | memory_usage | 内存使用率 | > 85% 告警 |
-| | gc_pause_seconds | GC暂停时间 | > 1秒告警 |
+| 类别 | 指标 | 说明 | 告警阈值 |
+|------|------|------|---------|
+| **Job** | job_success_rate | Job成功率 | < 95% |
+| | job_duration_seconds | Job执行时长 | > 2倍平均值 |
+| **数据** | throughput | 吞吐量（条/秒） | < 50%正常值 |
+| | latency_seconds | 处理延迟 | > 5秒 |
+| **Checkpoint** | checkpoint_success_rate | Checkpoint成功率 | < 95% |
+| | checkpoint_duration | Checkpoint时长 | > 60秒 |
+| **背压** | backpressure_active | 是否背压 | 持续5分钟 |
+| | buffer_size_ratio | 缓冲区使用率 | > 90% |
+| **系统** | cpu_usage | CPU使用率 | > 80% |
+| | memory_usage | 内存使用率 | > 85% |
+
+### 7.3 运维要点
+
+**高可用**：
+- PostgreSQL 主从复制
+- RocksDB 定期备份到 S3
+- Checkpoint 异地备份
+
+**故障处理**：
+- Job 失败自动重试（最多 3 次）
+- Checkpoint 失败不影响 Job 运行
+- Pod 崩溃自动拉起，从最近 Checkpoint 恢复
+
+**容量规划**：
+- 状态大小 < 10MB：使用 Memory Backend
+- 状态大小 > 10MB：使用 RocksDB Backend
+- Checkpoint 保留最近 10 个，自动清理旧数据
 
 ---
 
-**文档版本**：v6.0 架构设计版
-**最后更新**：2025-11-07
-**文档性质**：架构设计文档（非实现文档）
-**设计理念**：Flink 抽象 + Reactor 实现
+## 附录
+
+### A. 与 Flink 的对比
+
+| 维度 | Flink | Pipeline Framework |
+|------|-------|-------------------|
+| **执行模型** | 分布式，跨节点数据传输 | 单实例，无跨节点传输 |
+| **流引擎** | 自研流处理引擎 | Project Reactor |
+| **背压** | Credit-based | Reactor request(n) |
+| **状态** | StateBackend | 借鉴 Flink，简化实现 |
+| **Checkpoint** | 分布式快照 | 单实例快照 |
+| **适用场景** | 大规模分布式计算 | 中小规模数据处理 |
+
+### B. 开发优先级
+
+**Phase 1 - 核心功能**：
+- Source/Operator/Sink 抽象接口
+- Reactor 集成
+- StreamGraph/JobGraph 构建
+- 基础 Kafka/JDBC 连接器
+
+**Phase 2 - 容错机制**：
+- State Backend（Memory/RocksDB）
+- Checkpoint Coordinator
+- 故障恢复
+
+**Phase 3 - 调度与监控**：
+- Job Scheduler（Cron/依赖调度）
+- Metrics 采集
+- Web UI
+
+**Phase 4 - 高级特性**：
+- 窗口算子
+- Exactly-Once 语义（两阶段提交）
+- SQL 支持
+
+---
+
+**文档版本**：v7.0  
+**最后更新**：2025-11-07  
+**文档性质**：架构设计文档
