@@ -716,142 +716,130 @@ Checkpoint 内容:
 
 #### 4.3.1 流式Job执行时序图
 
-```plantuml
-@startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam defaultFontName Arial
+```mermaid
+sequenceDiagram
+    participant Executor as JobExecutor
+    participant BP as BackpressureController
+    participant Source as Source
+    participant Flow as OperatorChain
+    participant Sink as Sink
 
-participant "JobExecutor" as Executor
-participant "BackpressureController" as BP
-participant "Source" as Source
-participant "OperatorChain" as Flow
-participant "Sink" as Sink
+    Note over Executor,Sink: Job启动
+    Executor->>BP: initialize(bufferSize=5000)
+    Executor->>Source: initialize()
+    Executor->>Flow: initialize()
+    Executor->>Sink: initialize(backpressureController)
+    Executor->>BP: start()
 
-== Job启动 ==
-Executor -> BP: initialize(bufferSize=5000)
-Executor -> Source: initialize()
-Executor -> Flow: initialize()
-Executor -> Sink: initialize(backpressureController)
-Executor -> BP: start()
+    Note over Executor,Sink: 第一批数据处理
+    BP->>Source: onReadyToPull(callback)
+    Source->>Source: pullData(batchSize=100)
+    Source->>BP: notifyDataPulled(batch, callback)
+    BP->>Flow: onDataAvailable(batch, callback)
+    Flow->>Flow: process(batch)
+    Flow->>BP: notifyProcessed(batch, callback)
+    BP->>Sink: onReadyToSink(batch, callback)
+    Sink->>Sink: writeBatch(batch)
+    Sink->>BP: notifySinkCompleted(count=100)
 
-== 第一批数据处理 ==
-BP -> Source: onReadyToPull(callback)
-Source -> Source: pullData(batchSize=100)
-Source -> BP: notifyDataPulled(batch, callback)
-BP -> Flow: onDataAvailable(batch, callback)
-Flow -> Flow: process(batch)
-Flow -> BP: notifyProcessed(batch, callback)
-BP -> Sink: onReadyToSink(batch, callback)
-Sink -> Sink: writeBatch(batch)
-Sink -> BP: notifySinkCompleted(count=100)
+    Note over Executor,Sink: 第二批数据处理
+    BP->>BP: checkBuffer()
+    Note right of BP: bufferedCount < threshold<br/>可以继续拉取
+    BP->>Source: onReadyToPull(callback)
+    Source->>Source: pullData(batchSize=100)
+    Source->>BP: notifyDataPulled(batch, callback)
+    BP->>Flow: onDataAvailable(batch, callback)
+    Flow->>Flow: process(batch)
+    Flow->>BP: notifyProcessed(batch, callback)
+    BP->>Sink: onReadyToSink(batch, callback)
+    Sink->>Sink: writeBatch(batch)
+    Sink->>BP: notifySinkCompleted(count=100)
 
-== 第二批数据处理 ==
-BP -> BP: checkBuffer()
-note right: bufferedCount < threshold\n可以继续拉取
-BP -> Source: onReadyToPull(callback)
-Source -> Source: pullData(batchSize=100)
-Source -> BP: notifyDataPulled(batch, callback)
-BP -> Flow: onDataAvailable(batch, callback)
-Flow -> Flow: process(batch)
-Flow -> BP: notifyProcessed(batch, callback)
-BP -> Sink: onReadyToSink(batch, callback)
-Sink -> Sink: writeBatch(batch)
-Sink -> BP: notifySinkCompleted(count=100)
+    Note over Executor,Sink: 背压触发
+    BP->>BP: checkBuffer()
+    Note right of BP: bufferedCount >= threshold<br/>暂停拉取
+    BP->>BP: pausePulling()
+    
+    Note over Sink: Sink继续处理缓冲区数据
+    
+    Sink->>BP: notifySinkCompleted(count=1000)
+    BP->>BP: checkBuffer()
+    Note right of BP: bufferedCount < threshold<br/>恢复拉取
+    BP->>Source: onReadyToPull(callback)
 
-== 背压触发 ==
-BP -> BP: checkBuffer()
-note right: bufferedCount >= threshold\n暂停拉取
-BP -> BP: pausePulling()
-
-... Sink继续处理缓冲区数据 ...
-
-Sink -> BP: notifySinkCompleted(count=1000)
-BP -> BP: checkBuffer()
-note right: bufferedCount < threshold\n恢复拉取
-BP -> Source: onReadyToPull(callback)
-
-== 继续处理 ==
-Source -> Source: pullData(batchSize=100)
-Source -> BP: notifyDataPulled(batch, callback)
-BP -> Flow: onDataAvailable(batch, callback)
-Flow -> Flow: process(batch)
-Flow -> BP: notifyProcessed(batch, callback)
-BP -> Sink: onReadyToSink(batch, callback)
-Sink -> Sink: writeBatch(batch)
-Sink -> BP: notifySinkCompleted(count=100)
-
-@enduml
+    Note over Executor,Sink: 继续处理
+    Source->>Source: pullData(batchSize=100)
+    Source->>BP: notifyDataPulled(batch, callback)
+    BP->>Flow: onDataAvailable(batch, callback)
+    Flow->>Flow: process(batch)
+    Flow->>BP: notifyProcessed(batch, callback)
+    BP->>Sink: onReadyToSink(batch, callback)
+    Sink->>Sink: writeBatch(batch)
+    Sink->>BP: notifySinkCompleted(count=100)
 ```
 
 #### 4.3.2 SQL任务执行时序图
 
-```plantuml
-@startuml
-skinparam monochrome true
-skinparam shadowing false
-skinparam defaultFontName Arial
+```mermaid
+sequenceDiagram
+    participant Executor as SqlTaskExecutor
+    participant BP as BackpressureController
+    participant RS as ResultSet
+    participant Sink as Sink
 
-participant "SqlTaskExecutor" as Executor
-participant "BackpressureController" as BP
-participant "ResultSet" as RS
-participant "Sink" as Sink
+    Note over Executor,Sink: 初始化
+    Executor->>Executor: executeQuery(sql)
+    Executor->>RS: 获取ResultSet
+    Executor->>BP: initialize(readCallback, sinkCallback)
+    Executor->>BP: start()
 
-== 初始化 ==
-Executor -> Executor: executeQuery(sql)
-Executor -> RS: 获取ResultSet
-Executor -> BP: initialize(readCallback, sinkCallback)
-Executor -> BP: start()
+    Note over Executor,Sink: 第一批数据
+    BP->>Executor: readCallback.onReadyToRead()
+    Executor->>RS: resultSet.next() x 1000
+    RS-->>Executor: 返回1000行
+    Executor->>BP: callback.onDataPulled(batch)
+    BP->>Sink: sinkCallback.onReadyToSink(batch)
+    Sink->>Sink: writeBatch(1000 rows)
+    Sink->>BP: callback.onSinkCompleted(1000)
 
-== 第一批数据 ==
-BP -> Executor: readCallback.onReadyToRead()
-Executor -> RS: resultSet.next() x 1000
-RS --> Executor: 返回1000行
-Executor -> BP: callback.onDataPulled(batch)
-BP -> Sink: sinkCallback.onReadyToSink(batch)
-Sink -> Sink: writeBatch(1000 rows)
-Sink -> BP: callback.onSinkCompleted(1000)
+    Note over Executor,Sink: 第二批数据
+    BP->>BP: checkBuffer()
+    Note right of BP: 缓冲区正常，继续读取
+    BP->>Executor: readCallback.onReadyToRead()
+    Executor->>RS: resultSet.next() x 1000
+    RS-->>Executor: 返回1000行
+    Executor->>BP: callback.onDataPulled(batch)
+    BP->>Sink: sinkCallback.onReadyToSink(batch)
+    Sink->>Sink: writeBatch(1000 rows)
+    Sink->>BP: callback.onSinkCompleted(1000)
 
-== 第二批数据 ==
-BP -> BP: checkBuffer()
-note right: 缓冲区正常，继续读取
-BP -> Executor: readCallback.onReadyToRead()
-Executor -> RS: resultSet.next() x 1000
-RS --> Executor: 返回1000行
-Executor -> BP: callback.onDataPulled(batch)
-BP -> Sink: sinkCallback.onReadyToSink(batch)
-Sink -> Sink: writeBatch(1000 rows)
-Sink -> BP: callback.onSinkCompleted(1000)
+    Note over Executor,Sink: 背压触发
+    BP->>BP: checkBuffer()
+    Note right of BP: bufferedCount >= threshold<br/>暂停读取ResultSet
+    BP->>BP: pauseReading()
+    
+    Note over Sink: Sink继续处理缓冲数据
+    
+    Sink->>BP: callback.onSinkCompleted(1000)
+    BP->>BP: checkBuffer()
+    Note right of BP: bufferedCount < threshold<br/>恢复读取
+    BP->>Executor: readCallback.onReadyToRead()
 
-== 背压触发 ==
-BP -> BP: checkBuffer()
-note right: bufferedCount >= threshold\n暂停读取ResultSet
-BP -> BP: pauseReading()
+    Note over Executor,Sink: 继续读取
+    Executor->>RS: resultSet.next() x 1000
+    RS-->>Executor: 返回1000行
+    Executor->>BP: callback.onDataPulled(batch)
+    BP->>Sink: sinkCallback.onReadyToSink(batch)
+    Sink->>Sink: writeBatch(1000 rows)
+    Sink->>BP: callback.onSinkCompleted(1000)
 
-... Sink继续处理缓冲数据 ...
-
-Sink -> BP: callback.onSinkCompleted(1000)
-BP -> BP: checkBuffer()
-note right: bufferedCount < threshold\n恢复读取
-BP -> Executor: readCallback.onReadyToRead()
-
-== 继续读取 ==
-Executor -> RS: resultSet.next() x 1000
-RS --> Executor: 返回1000行
-Executor -> BP: callback.onDataPulled(batch)
-BP -> Sink: sinkCallback.onReadyToSink(batch)
-Sink -> Sink: writeBatch(1000 rows)
-Sink -> BP: callback.onSinkCompleted(1000)
-
-== 完成 ==
-BP -> Executor: readCallback.onReadyToRead()
-Executor -> RS: resultSet.next()
-RS --> Executor: 没有更多数据
-Executor -> BP: callback.onNoMoreData()
-BP -> BP: waitForBufferEmpty()
-BP -> Executor: onCompleted()
-
-@enduml
+    Note over Executor,Sink: 完成
+    BP->>Executor: readCallback.onReadyToRead()
+    Executor->>RS: resultSet.next()
+    RS-->>Executor: 没有更多数据
+    Executor->>BP: callback.onNoMoreData()
+    BP->>BP: waitForBufferEmpty()
+    BP->>Executor: onCompleted()
 ```
 
 ---
