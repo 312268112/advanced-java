@@ -31,67 +31,57 @@ Pipeline Framework 是一个单机流式/批量数据处理框架，核心特点
 
 ### 2.1 架构分层
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                     API Layer (API 层)                        │
-├──────────────────────┬───────────────────────────────────────┤
-│  streaming-api       │         sql-task-api                  │
-│  (流式 API)           │         (SQL任务API)                  │
-│                      │                                       │
-│  定义 source-flow-sink │  定义 SQL 任务                        │
-│  支持背压控制          │  支持复杂SQL、多表Join                 │
-└──────────┬───────────┴────────────┬──────────────────────────┘
-           │                        │
-           ▼                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│              graph-builder (图构建模块)                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐        │
-│  │ StreamGraph │→ │  JobGraph   │→ │ ExecutionDAG │        │
-│  │  (逻辑图)    │  │  (物理图)    │  │  (执行图)     │        │
-│  └─────────────┘  └─────────────┘  └──────────────┘        │
-│                                                              │
-│  SQL任务跳过图构建，直接生成SqlExecutionPlan                  │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│            scheduler-engine (调度引擎)                        │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  ExecutionMode (执行模式)                              │  │
-│  │  - STREAMING：流式 source-flow-sink                   │  │
-│  │  - BATCH_ROLLER：滚动翻页 source-flow-sink            │  │
-│  │  - SQL_TASK：SQL任务（不是source-flow-sink）          │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────┬───────────────────────────────────┬───────────────┘
-          │                                   │
-          ▼                                   ▼
-┌──────────────────────┐          ┌──────────────────────┐
-│  runtime-execution   │          │  sql-task-executor   │
-│   (流式运行时)        │          │   (SQL任务执行器)     │
-│                      │          │                      │
-│  ┌────────────────┐  │          │  ┌────────────────┐  │
-│  │ OperatorChain  │  │          │  │ SqlExecutor    │  │
-│  │  (算子链)      │  │          │  │ (SQL执行)      │  │
-│  ├────────────────┤  │          │  ├────────────────┤  │
-│  │ BackPressure   │  │          │  │ ResultStream   │  │
-│  │  (背压控制)    │◄─┼──────────┼─►│ (结果流读取)   │  │
-│  ├────────────────┤  │          │  ├────────────────┤  │
-│  │ TaskExecutor   │  │          │  │ BackPressure   │  │
-│  │  (任务执行器)  │  │          │  │ (背压控制)     │  │
-│  └────────────────┘  │          │  └────────────────┘  │
-└──────────┬───────────┘          └──────────┬───────────┘
-           │                                 │
-           └────────────────┬────────────────┘
-                            │
-                            ▼
-              ┌──────────────────────────┐
-              │   backpressure-manager   │
-              │     (背压管理器)          │
-              │                          │
-              │  - Callback-based flow   │
-              │  - Sink驱动Source        │
-              │  - 异步非阻塞            │
-              └──────────────────────────┘
+```mermaid
+graph TB
+    subgraph API["API Layer (API 层)"]
+        StreamAPI["streaming-api<br/>(流式 API)<br/><br/>定义 source-flow-sink<br/>支持背压控制"]
+        SqlAPI["sql-task-api<br/>(SQL任务API)<br/><br/>定义 SQL 任务<br/>支持复杂SQL、多表Join"]
+    end
+    
+    subgraph GraphBuilder["graph-builder (图构建模块)"]
+        StreamGraph["StreamGraph<br/>(逻辑图)"]
+        JobGraph["JobGraph<br/>(物理图)"]
+        ExecutionDAG["ExecutionDAG<br/>(执行图)"]
+        Note1["SQL任务跳过图构建<br/>直接生成SqlExecutionPlan"]
+        
+        StreamGraph --> JobGraph
+        JobGraph --> ExecutionDAG
+    end
+    
+    subgraph Scheduler["scheduler-engine (调度引擎)"]
+        ExecMode["ExecutionMode (执行模式)<br/><br/>- STREAMING: 流式 source-flow-sink<br/>- BATCH_ROLLER: 滚动翻页<br/>- SQL_TASK: SQL任务"]
+    end
+    
+    subgraph Runtime["runtime-execution (流式运行时)"]
+        OpChain["OperatorChain<br/>(算子链)"]
+        BP1["BackPressure<br/>(背压控制)"]
+        TaskExec["TaskExecutor<br/>(任务执行器)"]
+    end
+    
+    subgraph SqlExec["sql-task-executor (SQL任务执行器)"]
+        SqlExecutor["SqlExecutor<br/>(SQL执行)"]
+        ResultStream["ResultStream<br/>(结果流读取)"]
+        BP2["BackPressure<br/>(背压控制)"]
+    end
+    
+    subgraph BPManager["backpressure-manager (背压管理器)"]
+        BPFeatures["- Callback-based flow<br/>- Sink驱动Source<br/>- 异步非阻塞"]
+    end
+    
+    StreamAPI --> GraphBuilder
+    SqlAPI --> GraphBuilder
+    GraphBuilder --> Scheduler
+    Scheduler --> Runtime
+    Scheduler --> SqlExec
+    Runtime <--> BPManager
+    SqlExec <--> BPManager
+    
+    style API fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style GraphBuilder fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Scheduler fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Runtime fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style SqlExec fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style BPManager fill:#f9f9f9,stroke:#333,stroke-width:2px
 ```
 
 ### 2.2 核心概念
@@ -100,26 +90,59 @@ Pipeline Framework 是一个单机流式/批量数据处理框架，核心特点
 
 用户 API 的直接翻译，保留所有算子细节。
 
+**用户代码**:
+```java
+source.map().filter().keyBy().window().reduce().sink()
 ```
-用户代码:
-  source.map().filter().keyBy().window().reduce().sink()
 
-StreamGraph:
-  [Source] → [Map] → [Filter] → [KeyBy] → [Window] → [Reduce] → [Sink]
+**StreamGraph (逻辑图)**:
+
+```mermaid
+graph LR
+    Source[Source] --> Map[Map]
+    Map --> Filter[Filter]
+    Filter --> KeyBy[KeyBy]
+    KeyBy --> Window[Window]
+    Window --> Reduce[Reduce]
+    Reduce --> Sink[Sink]
+    
+    style Source fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Map fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Filter fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style KeyBy fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Window fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Reduce fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Sink fill:#f9f9f9,stroke:#333,stroke-width:2px
 ```
 
 #### 2.2.2 JobGraph (物理图)
 
 优化后的执行图，应用算子链。
 
-```
-JobGraph:
-  [OperatorChain-1]        [Window]      [OperatorChain-2]
-   Source                                  Reduce
-     ↓                                       ↓
-   Map                                     Sink
-     ↓
-   Filter
+```mermaid
+graph TB
+    subgraph Chain1["OperatorChain-1"]
+        Source[Source]
+        Map[Map]
+        Filter[Filter]
+        Source --> Map
+        Map --> Filter
+    end
+    
+    Window[Window]
+    
+    subgraph Chain2["OperatorChain-2"]
+        Reduce[Reduce]
+        Sink[Sink]
+        Reduce --> Sink
+    end
+    
+    Chain1 --> Window
+    Window --> Chain2
+    
+    style Chain1 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Chain2 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Window fill:#f9f9f9,stroke:#333,stroke-width:2px
 ```
 
 **算子链规则**：
@@ -678,38 +701,50 @@ Checkpoint 内容:
 
 ### 4.2 执行流程
 
-```
-时刻T0: Job启动
-  └─> BackpressureController.start()
-      └─> 触发 Source.pullCallback.onReadyToPull()
-
-时刻T1: Source拉取数据
-  └─> Source从Kafka拉取100条
-      └─> 调用 callback.onDataPulled(batch)
-          └─> BackpressureController.notifyDataPulled()
-              └─> 触发 Flow.processCallback.onDataAvailable()
-
-时刻T2: Flow处理数据
-  └─> OperatorChain.process(batch)
-      └─> Map -> Filter -> Transform
-          └─> 调用 callback.onProcessed(processedBatch)
-              └─> 触发 Sink.sinkCallback.onReadyToSink()
-
-时刻T3: Sink写入数据
-  └─> Sink.writeBatch(batch)
-      └─> 调用 callback.onSinkCompleted(100)
-          └─> BackpressureController.notifySinkCompleted()
-              └─> checkAndTriggerPull()
-                  └─> 如果缓冲区未满，触发下一次拉取
-
-时刻T4: 背压触发
-  └─> bufferedCount >= bufferSize
-      └─> 停止触发Source拉取
-
-时刻T5: 背压恢复
-  └─> Sink继续写入，bufferedCount下降
-      └─> bufferedCount < bufferSize * 0.7
-          └─> 恢复数据拉取
+```mermaid
+graph TD
+    T0["时刻T0: Job启动"] --> T0A["BackpressureController.start()"]
+    T0A --> T0B["触发 Source.pullCallback.onReadyToPull()"]
+    
+    T0B --> T1["时刻T1: Source拉取数据"]
+    T1 --> T1A["Source从Kafka拉取100条"]
+    T1A --> T1B["调用 callback.onDataPulled(batch)"]
+    T1B --> T1C["BackpressureController.notifyDataPulled()"]
+    T1C --> T1D["触发 Flow.processCallback.onDataAvailable()"]
+    
+    T1D --> T2["时刻T2: Flow处理数据"]
+    T2 --> T2A["OperatorChain.process(batch)"]
+    T2A --> T2B["Map -> Filter -> Transform"]
+    T2B --> T2C["调用 callback.onProcessed(processedBatch)"]
+    T2C --> T2D["触发 Sink.sinkCallback.onReadyToSink()"]
+    
+    T2D --> T3["时刻T3: Sink写入数据"]
+    T3 --> T3A["Sink.writeBatch(batch)"]
+    T3A --> T3B["调用 callback.onSinkCompleted(100)"]
+    T3B --> T3C["BackpressureController.notifySinkCompleted()"]
+    T3C --> T3D["checkAndTriggerPull()"]
+    T3D --> T3E{缓冲区未满?}
+    
+    T3E -->|是| T3F["触发下一次拉取"]
+    T3E -->|否| T4["时刻T4: 背压触发"]
+    
+    T4 --> T4A["bufferedCount >= bufferSize"]
+    T4A --> T4B["停止触发Source拉取"]
+    
+    T4B --> T5["时刻T5: 背压恢复"]
+    T5 --> T5A["Sink继续写入，bufferedCount下降"]
+    T5A --> T5B["bufferedCount < bufferSize * 0.7"]
+    T5B --> T5C["恢复数据拉取"]
+    
+    T3F --> T1
+    T5C --> T1
+    
+    style T0 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style T1 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style T2 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style T3 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style T4 fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style T5 fill:#f9f9f9,stroke:#333,stroke-width:2px
 ```
 
 ### 4.3 时序图
