@@ -3,284 +3,152 @@
 ## 目录
 
 - [1. 项目概述](#1-项目概述)
-- [2. 快速开始](#2-快速开始)
-- [3. 核心概念](#3-核心概念)
-- [4. 核心模块详解](#4-核心模块详解)
-- [5. 断点机制设计](#5-断点机制设计)
-- [6. 数据库设计](#6-数据库设计)
-- [7. 开发指南](#7-开发指南)
-- [8. 部署运维](#8-部署运维)
+- [2. 核心模块总览](#2-核心模块总览)
+- [3. 模块详细设计](#3-模块详细设计)
+- [4. 数据库设计](#4-数据库设计)
+- [5. 开发指南](#5-开发指南)
 
 ---
 
 ## 1. 项目概述
 
-### 1.1 什么是 Pipeline Framework？
+### 1.1 项目定位
 
-Pipeline Framework 是一个基于 **Spring Project Reactor** 的响应式数据处理框架，用于构建流式和批量数据处理任务。
+Pipeline Framework 是一个基于 Spring Project Reactor 的响应式数据处理框架，支持流式和批量数据处理。
 
 **核心理念**：
-- 一个 Job = Source（数据源） → Flow（数据处理） → Sink（数据输出）
+- 一个 Job = Source (数据源) → Flow (数据处理) → Sink (数据输出)
 - 每个 Job 在单个实例内完整执行，不跨实例传输数据
 - 使用 Reactor 的响应式编程模型，天然支持背压控制
 
-**适用场景**：
-- ✅ 实时数据流处理（Kafka → 转换 → Kafka）
-- ✅ API 数据同步（HTTP API 翻页 → 转换 → 数据库）
-- ✅ 数据分析报表（复杂 SQL → 转换 → 文件/数据库）
+**技术栈**：Spring Boot 3.x + Project Reactor 3.x + Spring Data JPA + PostgreSQL + RocksDB
 
-### 1.2 技术栈
+### 1.2 三种执行模式
 
-| 技术 | 版本 | 用途 |
-|------|------|------|
-| Spring Boot | 3.x | 应用框架 |
-| Project Reactor | 3.x | 响应式编程、背压控制 |
-| Spring Data JPA | 3.x | 元数据存储 |
-| RocksDB | 7.x | 状态后端 |
-| PostgreSQL | 14+ | 元数据数据库 |
-| Apache Calcite | 1.x | SQL 解析（可选） |
+| 模式 | 数据源 | 特点 | 使用场景 |
+|------|--------|------|----------|
+| **STREAMING** | Kafka/MQ | 无限流、持续运行、支持水印 | 实时流处理、实时告警 |
+| **BATCH_ROLLER** | HTTP API/分页查询 | 自动翻页、读完结束、可断点续传 | 数据同步、历史数据迁移 |
+| **SQL_TASK** | SQL 查询 | 执行复杂 SQL、流式读取结果集 | 数据分析、报表生成 |
 
-### 1.3 系统架构
+---
+
+## 2. 核心模块总览
+
+### 2.1 模块架构
 
 ```mermaid
 graph TB
-    subgraph "用户层"
-        API[API 定义 Job]
+    subgraph "接入层"
+        API[API接入模块<br/>streaming-api<br/>sql-api]
     end
     
-    subgraph "核心层"
-        Registry[Job Registry<br/>任务注册]
-        Scheduler[Job Scheduler<br/>任务调度]
-        Executor[Job Executor<br/>任务执行]
+    subgraph "管理层"
+        Registry[任务注册中心<br/>job-registry]
+        Scheduler[任务调度器<br/>job-scheduler]
+    end
+    
+    subgraph "执行层"
+        Executor[任务执行器<br/>job-executor]
+        ReactorEngine[Reactor引擎<br/>reactor-engine]
     end
     
     subgraph "运行时层"
-        Reactor[Reactor Engine<br/>响应式引擎]
-        State[State Manager<br/>状态管理]
-        Checkpoint[Checkpoint<br/>断点机制]
+        StateManager[状态管理器<br/>state-manager]
+        CheckpointManager[断点管理器<br/>checkpoint-manager]
+        ConnectorManager[连接器管理器<br/>connector-manager]
     end
     
-    subgraph "连接器层"
-        Kafka[Kafka Connector]
-        JDBC[JDBC Connector]
-        HTTP[HTTP Connector]
+    subgraph "基础设施层"
+        MetricsCollector[指标收集器<br/>metrics-collector]
+        Storage[(存储层<br/>PostgreSQL + RocksDB + S3)]
     end
     
     API --> Registry
     Registry --> Scheduler
     Scheduler --> Executor
-    Executor --> Reactor
-    Reactor --> State
-    State --> Checkpoint
-    Reactor --> Kafka
-    Reactor --> JDBC
-    Reactor --> HTTP
+    Executor --> ReactorEngine
+    ReactorEngine --> StateManager
+    ReactorEngine --> CheckpointManager
+    ReactorEngine --> ConnectorManager
+    ReactorEngine --> MetricsCollector
+    StateManager --> Storage
+    CheckpointManager --> Storage
+    MetricsCollector --> Storage
 ```
 
----
+### 2.2 所有核心模块列表
 
-## 2. 快速开始
+#### 模块 1: streaming-api (流式 API 模块)
 
-### 2.1 创建一个流式 Job
+**功能**：提供用户编写流式数据处理任务的 API 接口
 
-```java
-@Configuration
-public class MyFirstJob {
-    
-    @Bean
-    public PipelineJob kafkaToKafkaJob() {
-        return PipelineJob.builder()
-            .name("my-first-job")
-            .description("从 Kafka 读取，转换后写入另一个 Kafka")
-            
-            // 1. 定义数据源
-            .source(KafkaSource.<String>builder()
-                .topic("input-topic")
-                .groupId("my-group")
-                .bootstrapServers("localhost:9092")
-                .build())
-            
-            // 2. 定义数据处理流程
-            .transform(flux -> flux
-                .map(String::toUpperCase)        // 转大写
-                .filter(s -> s.length() > 5)     // 过滤长度 > 5
-            )
-            
-            // 3. 定义数据输出
-            .sink(KafkaSink.<String>builder()
-                .topic("output-topic")
-                .bootstrapServers("localhost:9092")
-                .build())
-            
-            // 4. 配置
-            .config(JobConfig.builder()
-                .checkpointInterval(Duration.ofMinutes(1))  // 每分钟一次 checkpoint
-                .backpressureStrategy(BackpressureStrategy.BUFFER)
-                .build())
-            
-            .build();
-    }
-}
-```
+**意义**：
+- 让用户可以用声明式的方式定义数据处理流程
+- 屏蔽底层 Reactor 的复杂性
+- 提供链式调用的友好 API
 
-### 2.2 启动应用
-
-```bash
-# 1. 启动应用
-mvn spring-boot:run
-
-# 2. 查看 Job 状态
-curl http://localhost:8080/api/jobs
-
-# 3. 手动触发 Job
-curl -X POST http://localhost:8080/api/jobs/my-first-job/start
-```
-
----
-
-## 3. 核心概念
-
-### 3.1 三种执行模式
-
-```mermaid
-graph LR
-    subgraph "STREAMING<br/>流式处理"
-        S1[Kafka/MQ] --> T1[实时转换] --> K1[Kafka/MQ]
-        style S1 fill:#f9f9f9
-        style T1 fill:#f9f9f9
-        style K1 fill:#f9f9f9
-    end
-```
-
-**特点**：
-- 数据源是无限流（Kafka、RabbitMQ 等）
-- Job 持续运行，不会自动结束
-- 支持事件时间和水印
-- 必须开启 Checkpoint
-
-```mermaid
-graph LR
-    subgraph "BATCH_ROLLER<br/>滚动翻页"
-        S2[HTTP API] --> T2[批量转换] --> K2[数据库]
-        style S2 fill:#f9f9f9
-        style T2 fill:#f9f9f9
-        style K2 fill:#f9f9f9
-    end
-```
-
-**特点**：
-- 数据源支持分页（HTTP API、数据库分页查询）
-- 自动翻页，读完所有数据后自动结束
-- 可选 Checkpoint（用于断点续传）
-
-```mermaid
-graph LR
-    subgraph "SQL_TASK<br/>SQL 任务"
-        S3[SQL 查询] --> K3[数据库/文件]
-        style S3 fill:#f9f9f9
-        style K3 fill:#f9f9f9
-    end
-```
-
-**特点**：
-- 执行复杂的 SQL 查询（多表 Join、聚合等）
-- 流式读取结果集，避免 OOM
-- 查询完成后自动结束
-
-### 3.2 Job 生命周期
-
-```mermaid
-stateDiagram-v2
-    [*] --> REGISTERED: 注册 Job
-    
-    REGISTERED --> SCHEDULED: 触发条件满足<br/>(Cron/手动/事件)
-    
-    SCHEDULED --> INITIALIZING: 开始初始化
-    INITIALIZING --> RUNNING: 初始化成功
-    INITIALIZING --> FAILED: 初始化失败
-    
-    RUNNING --> CHECKPOINTING: 触发 Checkpoint
-    CHECKPOINTING --> RUNNING: Checkpoint 完成
-    CHECKPOINTING --> FAILED: Checkpoint 失败
-    
-    RUNNING --> COMPLETED: 执行完成<br/>(仅批量任务)
-    RUNNING --> FAILED: 执行出错
-    RUNNING --> CANCELLED: 手动取消
-    
-    FAILED --> SCHEDULED: 重试<br/>(未达最大次数)
-    FAILED --> [*]: 放弃<br/>(达到最大次数)
-    
-    COMPLETED --> [*]
-    CANCELLED --> [*]
-```
-
-**状态说明**：
-
-| 状态 | 说明 | 下一步 |
-|------|------|--------|
-| **REGISTERED** | Job 已注册但未调度 | 等待触发条件 |
-| **SCHEDULED** | Job 已调度，等待执行 | 分配资源并初始化 |
-| **INITIALIZING** | 正在初始化（创建 Source/Sink） | 成功进入 RUNNING |
-| **RUNNING** | Job 正在执行 | 持续运行或完成 |
-| **CHECKPOINTING** | 正在执行 Checkpoint | 完成后继续运行 |
-| **COMPLETED** | Job 执行完成 | 终态（仅批量任务） |
-| **FAILED** | Job 执行失败 | 重试或放弃 |
-| **CANCELLED** | Job 被手动取消 | 终态 |
-
----
-
-## 4. 核心模块详解
-
-### 4.1 job-registry (任务注册中心)
-
-**职责**：管理 Job 的定义、版本和配置。
-
-**核心功能**：
-- Job 的增删改查
-- Job 版本管理（支持多版本并存）
-- Job 配置管理（参数、调度策略等）
-- Job 依赖关系管理
+**难点**：
+- 如何设计简洁易用的 API，同时保留足够的灵活性
+- 如何将用户定义的算子转换为 Reactor 的 Flux 操作
+- 如何处理类型推断和泛型
 
 **核心接口**：
-
 ```java
-public interface JobRegistry {
-    
-    /**
-     * 注册一个新的 Job
-     */
-    JobDefinition register(PipelineJob job);
-    
-    /**
-     * 更新 Job 定义（会创建新版本）
-     */
-    JobDefinition update(String jobName, PipelineJob job);
-    
-    /**
-     * 获取 Job 定义
-     */
-    JobDefinition get(String jobName);
-    
-    /**
-     * 获取指定版本的 Job 定义
-     */
-    JobDefinition get(String jobName, int version);
-    
-    /**
-     * 列出所有 Job
-     */
-    List<JobDefinition> listAll();
-    
-    /**
-     * 启用/禁用 Job
-     */
-    void enable(String jobName);
-    void disable(String jobName);
+public interface DataStream<T> {
+    <R> DataStream<R> map(Function<T, R> mapper);
+    DataStream<T> filter(Predicate<T> predicate);
+    <R> DataStream<R> flatMap(Function<T, Publisher<R>> mapper);
+    DataStream<T> window(Duration size);
+    DataStream<T> keyBy(Function<T, ?> keySelector);
+    void addSink(ReactorSink<T> sink);
 }
 ```
 
-**数据结构**：
+---
 
+#### 模块 2: sql-api (SQL API 模块)
+
+**功能**：支持用户通过 SQL 定义数据处理任务
+
+**意义**：
+- 降低使用门槛，SQL 开发者可以直接上手
+- 复杂的多表 Join、聚合可以用 SQL 简洁表达
+- 可以复用现有的 SQL 查询逻辑
+
+**难点**：
+- SQL 解析和优化（需要集成 Apache Calcite）
+- 如何将 SQL 转换为 Reactor 流式处理
+- 大结果集的流式读取，避免 OOM
+
+**核心接口**：
+```java
+public interface SqlJob {
+    SqlJob sql(String sqlQuery);
+    SqlJob dataSource(DataSource dataSource);
+    SqlJob sink(ReactorSink<?> sink);
+    SqlJob fetchSize(int size);
+    SqlJob queryTimeout(Duration timeout);
+}
+```
+
+---
+
+#### 模块 3: job-registry (任务注册中心)
+
+**功能**：管理所有 Job 的定义、版本和配置
+
+**意义**：
+- 集中管理所有 Job，方便查询和维护
+- 支持 Job 的版本管理，可以回滚到历史版本
+- 提供 Job 的启用/禁用功能
+
+**难点**：
+- Job 定义的序列化和反序列化（如何将代码定义存储到数据库）
+- 版本管理策略（如何处理版本冲突）
+- 如何支持动态修改 Job 定义而不重启服务
+
+**核心数据结构**：
 ```java
 public class JobDefinition {
     private Long id;
@@ -290,860 +158,671 @@ public class JobDefinition {
     private String dagDefinition;        // DAG 定义（JSON）
     private Map<String, Object> config;  // 配置参数
     private boolean enabled;             // 是否启用
-    private LocalDateTime createTime;
-    private LocalDateTime updateTime;
 }
 ```
 
-**实现要点**：
-1. 使用数据库存储 Job 定义（`pipeline_job_definition` 表）
-2. 每次更新 Job 时，version 自增，保留历史版本
-3. 启用/禁用只影响最新版本
-4. 支持从 YAML/JSON 文件导入 Job 定义
+**关键难点详解**：
+1. **Job 定义序列化**：用户用 Java 代码定义 Job，但需要存储到数据库，如何序列化？
+   - 解决方案：将 Job 定义转换为 JSON DSL 格式存储
+   - 包含 Source 类型、配置、Transform 算子链、Sink 配置等
 
-**示例**：
-
-```java
-@Service
-public class JobRegistryService implements JobRegistry {
-    
-    @Autowired
-    private JobDefinitionRepository repository;
-    
-    @Override
-    @Transactional
-    public JobDefinition register(PipelineJob job) {
-        // 1. 检查是否已存在
-        if (repository.existsByJobName(job.getName())) {
-            throw new JobAlreadyExistsException(job.getName());
-        }
-        
-        // 2. 转换为数据库实体
-        JobDefinitionEntity entity = new JobDefinitionEntity();
-        entity.setJobName(job.getName());
-        entity.setJobType(job.getType());
-        entity.setVersion(1);
-        entity.setDagDefinition(serializeToJson(job));
-        entity.setEnabled(true);
-        
-        // 3. 保存到数据库
-        repository.save(entity);
-        
-        return toJobDefinition(entity);
-    }
-}
-```
+2. **版本管理**：如何在不影响运行中 Job 的情况下更新定义？
+   - 解决方案：每次更新创建新版本，运行中的 Job 仍使用旧版本，新启动的 Job 使用新版本
 
 ---
 
-### 4.2 job-scheduler (任务调度器)
+#### 模块 4: job-scheduler (任务调度器)
 
-**职责**：根据触发条件调度 Job 的执行。
+**功能**：根据触发条件调度 Job 的执行
 
-**核心功能**：
-- 支持多种触发方式（Cron、手动、事件、依赖）
-- 管理 Job 的调度计划
-- 分配 Job 到执行器
-- 监控 Job 执行状态
+**意义**：
+- 支持多种触发方式（定时、手动、事件、依赖）
+- 管理 Job 的执行计划和调度策略
+- 处理 Job 的重试和失败转移
 
-**触发方式**：
+**难点**：
+- 分布式环境下如何避免重复调度
+- 如何处理 Job 之间的依赖关系
+- 如何实现高效的定时调度
+
+**触发方式设计**：
 
 ```mermaid
 graph TB
-    subgraph "触发方式"
-        Cron[Cron 触发<br/>定时执行]
-        Manual[手动触发<br/>API 调用]
-        Event[事件触发<br/>Kafka/MQ 消息]
-        Dependency[依赖触发<br/>上游 Job 完成]
+    subgraph "触发源"
+        T1[Cron表达式<br/>每天凌晨2点]
+        T2[手动触发<br/>API调用]
+        T3[事件触发<br/>Kafka消息到达]
+        T4[依赖触发<br/>上游Job完成]
     end
     
-    Cron --> Scheduler[Scheduler]
-    Manual --> Scheduler
-    Event --> Scheduler
-    Dependency --> Scheduler
+    subgraph "调度决策"
+        D1{Job状态检查}
+        D2{资源检查}
+        D3{依赖检查}
+    end
     
-    Scheduler --> Executor[Job Executor]
+    subgraph "执行分发"
+        E1[选择实例]
+        E2[创建执行ID]
+        E3[提交到Executor]
+    end
+    
+    T1 --> D1
+    T2 --> D1
+    T3 --> D1
+    T4 --> D1
+    
+    D1 -->|已禁用| Reject1[拒绝执行]
+    D1 -->|运行中| Reject2[避免重复]
+    D1 -->|可调度| D2
+    
+    D2 -->|资源不足| Wait1[等待资源]
+    D2 -->|资源充足| D3
+    
+    D3 -->|依赖未满足| Wait2[等待依赖]
+    D3 -->|依赖已满足| E1
+    
+    E1 --> E2 --> E3
 ```
 
-**核心接口**：
-
-```java
-public interface JobScheduler {
-    
-    /**
-     * 添加调度计划
-     */
-    void schedule(String jobName, ScheduleConfig config);
-    
-    /**
-     * 取消调度计划
-     */
-    void unschedule(String jobName);
-    
-    /**
-     * 手动触发 Job
-     */
-    String triggerJob(String jobName);
-    
-    /**
-     * 获取下次执行时间
-     */
-    LocalDateTime getNextExecutionTime(String jobName);
-}
-```
-
-**调度配置**：
-
-```java
-public class ScheduleConfig {
-    private ScheduleType type;        // CRON/MANUAL/EVENT/DEPENDENCY
-    private String cronExpression;    // Cron 表达式
-    private String eventTopic;        // 事件主题
-    private List<String> dependencies; // 依赖的 Job
-    private int maxRetryTimes;        // 最大重试次数
-    private Duration retryInterval;   // 重试间隔
-}
-```
-
-**实现要点**：
-1. 使用 Spring 的 `@Scheduled` 或 Quartz 实现 Cron 调度
-2. 事件触发使用 Kafka/RabbitMQ 监听器
-3. 依赖触发通过事件总线实现
-4. 调度时检查 Job 状态，避免重复执行
-
-**示例**：
-
-```java
-@Service
-public class JobSchedulerService implements JobScheduler {
-    
-    @Autowired
-    private TaskScheduler taskScheduler;
-    
-    @Autowired
-    private JobExecutor jobExecutor;
-    
-    private Map<String, ScheduledFuture<?>> scheduledTasks = new ConcurrentHashMap<>();
-    
-    @Override
-    public void schedule(String jobName, ScheduleConfig config) {
-        if (config.getType() == ScheduleType.CRON) {
-            // Cron 调度
-            ScheduledFuture<?> future = taskScheduler.schedule(
-                () -> triggerJob(jobName),
-                new CronTrigger(config.getCronExpression())
-            );
-            scheduledTasks.put(jobName, future);
-        }
-        // 其他触发方式...
-    }
-    
-    @Override
-    public String triggerJob(String jobName) {
-        // 1. 生成执行 ID
-        String executionId = UUID.randomUUID().toString();
-        
-        // 2. 检查 Job 状态
-        JobDefinition job = jobRegistry.get(jobName);
-        if (!job.isEnabled()) {
-            throw new JobDisabledException(jobName);
-        }
-        
-        // 3. 提交到执行器
-        jobExecutor.submit(jobName, executionId);
-        
-        return executionId;
-    }
-}
-```
+**关键难点详解**：
+1. **避免重复调度**：分布式环境下多个实例都可能触发同一个 Job
+   - 解决方案：使用数据库行锁或分布式锁（Redis/Zookeeper）
+   
+2. **依赖关系处理**：Job A 依赖 Job B，如何确保顺序？
+   - 解决方案：维护依赖 DAG，使用事件总线通知依赖完成
 
 ---
 
-### 4.3 job-executor (任务执行器)
+#### 模块 5: job-executor (任务执行器)
 
-**职责**：执行具体的 Job，管理 Job 的运行时生命周期。
+**功能**：执行具体的 Job，管理 Job 的运行时生命周期
 
-**核心功能**：
-- 初始化 Source、Sink、算子链
-- 构建 Reactor 管道
-- 启动 Job 执行
-- 监控执行状态
-- 处理异常和重试
+**意义**：
+- 负责 Job 的初始化、启动、监控、停止
+- 管理 Job 的资源隔离（线程池、内存）
+- 处理 Job 执行过程中的异常和重试
 
-**核心接口**：
+**难点**：
+- 如何实现不同 Job 之间的资源隔离
+- 如何优雅地停止一个运行中的 Job
+- 如何从 Checkpoint 恢复 Job 状态
 
-```java
-public interface JobExecutor {
-    
-    /**
-     * 提交 Job 执行
-     */
-    void submit(String jobName, String executionId);
-    
-    /**
-     * 取消 Job 执行
-     */
-    void cancel(String executionId);
-    
-    /**
-     * 获取 Job 执行状态
-     */
-    JobExecutionStatus getStatus(String executionId);
-    
-    /**
-     * 暂停 Job（仅流式任务）
-     */
-    void pause(String executionId);
-    
-    /**
-     * 恢复 Job（仅流式任务）
-     */
-    void resume(String executionId);
-}
-```
-
-**执行流程**：
+**Job 生命周期状态机**：
 
 ```mermaid
-graph TB
-    Start[接收执行请求] --> Load[加载 Job 定义]
-    Load --> Init[初始化组件]
+stateDiagram-v2
+    [*] --> REGISTERED: 注册Job
     
-    Init --> InitSource[创建 Source]
-    Init --> InitSink[创建 Sink]
-    Init --> InitState[初始化 State Backend]
+    REGISTERED --> SCHEDULED: 触发条件满足
     
-    InitSource --> Build[构建 Reactor Pipeline]
-    InitSink --> Build
-    InitState --> Build
+    SCHEDULED --> INITIALIZING: 开始初始化
     
-    Build --> Restore{需要恢复?}
-    Restore -->|是| LoadCheckpoint[加载 Checkpoint]
-    Restore -->|否| Subscribe[订阅执行]
-    LoadCheckpoint --> Subscribe
+    INITIALIZING --> INIT_FAILED: 初始化失败<br/>(Source连接失败等)
+    INITIALIZING --> RUNNING: 初始化成功
     
-    Subscribe --> Run[运行中]
+    RUNNING --> CHECKPOINTING: 触发Checkpoint
+    CHECKPOINTING --> RUNNING: Checkpoint成功
+    CHECKPOINTING --> CHECKPOINT_FAILED: Checkpoint失败
+    CHECKPOINT_FAILED --> RUNNING: 继续运行
+    CHECKPOINT_FAILED --> FAILED: 连续失败
     
-    Run --> Monitor[监控状态]
-    Monitor --> Check{检查状态}
-    Check -->|正常| Run
-    Check -->|完成| Complete[执行完成]
-    Check -->|失败| Error[处理错误]
+    RUNNING --> COMPLETED: 执行完成<br/>(批量任务)
+    RUNNING --> FAILED: 执行出错
+    RUNNING --> CANCELLING: 收到取消信号
     
-    Error --> Retry{需要重试?}
-    Retry -->|是| Load
-    Retry -->|否| Failed[标记失败]
+    CANCELLING --> CANCELLED: 取消成功
+    CANCELLING --> CANCEL_FAILED: 取消失败
+    CANCEL_FAILED --> FAILED: 强制终止
+    
+    FAILED --> SCHEDULED: 重试<br/>(未达最大次数)
+    FAILED --> DEAD: 放弃<br/>(达到最大次数)
+    INIT_FAILED --> SCHEDULED: 重试
+    INIT_FAILED --> DEAD: 放弃
+    
+    COMPLETED --> [*]
+    CANCELLED --> [*]
+    DEAD --> [*]
 ```
 
-**实现要点**：
-1. 使用线程池执行 Job，隔离不同 Job
-2. 每个 Job 有独立的 Reactor Scheduler
-3. 记录执行日志到 `pipeline_job_execution` 表
-4. 异常时触发告警和重试
+**关键难点详解**：
+1. **资源隔离**：不同 Job 不能互相影响
+   - 解决方案：每个 Job 使用独立的线程池和 Reactor Scheduler
+   - 每个 Job 有内存配额限制
 
-**示例**：
+2. **优雅停止**：如何中断一个运行中的 Reactor Flux？
+   - 解决方案：使用 `Flux.takeUntilOther()` 监听停止信号
+   - 给 Job 一个宽限期（如 30 秒），超时强制终止
 
-```java
-@Service
-public class JobExecutorService implements JobExecutor {
-    
-    @Autowired
-    private JobRegistry jobRegistry;
-    
-    @Autowired
-    private StateManager stateManager;
-    
-    @Autowired
-    private JobExecutionRepository executionRepository;
-    
-    private ExecutorService executorService = Executors.newCachedThreadPool();
-    
-    @Override
-    public void submit(String jobName, String executionId) {
-        executorService.submit(() -> {
-            try {
-                // 1. 记录执行开始
-                JobExecutionEntity execution = new JobExecutionEntity();
-                execution.setExecutionId(executionId);
-                execution.setJobName(jobName);
-                execution.setStatus(JobStatus.INITIALIZING);
-                execution.setStartTime(LocalDateTime.now());
-                executionRepository.save(execution);
-                
-                // 2. 加载 Job 定义
-                JobDefinition jobDef = jobRegistry.get(jobName);
-                PipelineJob job = deserializeJob(jobDef);
-                
-                // 3. 初始化组件
-                ReactorSource<?> source = job.getSource();
-                ReactorSink<?> sink = job.getSink();
-                
-                // 4. 检查是否需要从 Checkpoint 恢复
-                Checkpoint checkpoint = stateManager.getLatestCheckpoint(executionId);
-                if (checkpoint != null) {
-                    source.restore(checkpoint);
-                }
-                
-                // 5. 构建 Reactor Pipeline
-                Flux<?> pipeline = source.flux()
-                    .transform(job.getTransform())
-                    .doOnNext(item -> {
-                        // 更新处理计数
-                        execution.incrementProcessedRecords();
-                    });
-                
-                // 6. 订阅并执行
-                execution.setStatus(JobStatus.RUNNING);
-                executionRepository.save(execution);
-                
-                sink.consume(pipeline)
-                    .doOnSuccess(v -> {
-                        execution.setStatus(JobStatus.COMPLETED);
-                        execution.setEndTime(LocalDateTime.now());
-                        executionRepository.save(execution);
-                    })
-                    .doOnError(e -> {
-                        execution.setStatus(JobStatus.FAILED);
-                        execution.setErrorMessage(e.getMessage());
-                        execution.setEndTime(LocalDateTime.now());
-                        executionRepository.save(execution);
-                    })
-                    .block();
-                    
-            } catch (Exception e) {
-                log.error("Job execution failed", e);
-            }
-        });
-    }
-}
-```
+3. **状态恢复**：从 Checkpoint 恢复时如何确保一致性？
+   - 解决方案：使用两阶段提交，先恢复状态，再继续处理
 
 ---
 
-### 4.4 reactor-engine (Reactor 引擎)
+#### 模块 6: reactor-engine (Reactor 引擎)
 
-**职责**：封装 Project Reactor 的能力，提供统一的响应式编程接口。
+**功能**：封装 Project Reactor 的能力，提供响应式流处理
 
-**核心功能**：
-- 提供 Source、Sink 的 Reactor 抽象
-- 管理 Scheduler（线程池）
-- 配置背压策略
-- 提供常用的 Reactor 算子封装
+**意义**：
+- 利用 Reactor 的天然背压支持，无需手动实现
+- 提供统一的 Source 和 Sink 抽象
+- 管理 Scheduler（线程池）和背压策略
 
-**核心接口**：
+**难点**：
+- 如何合理配置 Scheduler，平衡性能和资源占用
+- 如何选择合适的背压策略
+- 如何监控 Reactor 流的运行状态
 
-```java
-/**
- * Reactor Source 接口
- */
-public interface ReactorSource<T> {
-    /**
-     * 返回一个 Flux，代表数据流
-     */
-    Flux<T> flux();
-    
-    /**
-     * 从 Checkpoint 恢复
-     */
-    void restore(Checkpoint checkpoint);
-}
-
-/**
- * Reactor Sink 接口
- */
-public interface ReactorSink<T> {
-    /**
-     * 消费 Flux，写入数据
-     */
-    Mono<Void> consume(Flux<T> flux);
-}
-```
-
-**背压策略配置**：
-
-```java
-public enum BackpressureStrategy {
-    /**
-     * 缓冲所有数据（内存允许的情况下）
-     * 适用：不能丢数据的场景
-     */
-    BUFFER,
-    
-    /**
-     * 丢弃最新数据
-     * 适用：实时性要求高，允许丢数据
-     */
-    DROP,
-    
-    /**
-     * 保留最新数据，丢弃旧数据
-     * 适用：只关心最新状态
-     */
-    LATEST,
-    
-    /**
-     * 抛出异常
-     * 适用：严格的数据完整性要求
-     */
-    ERROR
-}
-```
-
-**Scheduler 管理**：
-
-```mermaid
-graph TB
-    subgraph "Scheduler 类型"
-        Immediate[immediate<br/>当前线程]
-        Single[single<br/>单线程]
-        Parallel[parallel<br/>固定线程池]
-        Elastic[elastic<br/>弹性线程池]
-    end
-    
-    subgraph "使用场景"
-        Immediate --> S1[简单同步操作]
-        Single --> S2[顺序处理]
-        Parallel --> S3[CPU密集操作]
-        Elastic --> S4[IO密集操作]
-    end
-```
-
-**实现要点**：
-1. 为每个 Job 创建独立的 Scheduler
-2. 根据 Job 类型选择合适的 Scheduler
-3. 实现自定义的背压策略
-4. 提供监控指标（缓冲区大小、丢弃计数等）
-
-**示例**：
-
-```java
-public class KafkaReactorSource implements ReactorSource<String> {
-    
-    private final KafkaConsumer<String, String> consumer;
-    private final BackpressureStrategy strategy;
-    
-    @Override
-    public Flux<String> flux() {
-        return Flux.create(sink -> {
-            // 1. 根据策略配置背压
-            FluxSink.OverflowStrategy overflowStrategy = switch (strategy) {
-                case BUFFER -> FluxSink.OverflowStrategy.BUFFER;
-                case DROP -> FluxSink.OverflowStrategy.DROP;
-                case LATEST -> FluxSink.OverflowStrategy.LATEST;
-                case ERROR -> FluxSink.OverflowStrategy.ERROR;
-            };
-            
-            // 2. 响应下游请求
-            sink.onRequest(n -> {
-                ConsumerRecords<String, String> records = 
-                    consumer.poll(Duration.ofMillis(100));
-                    
-                records.forEach(record -> {
-                    sink.next(record.value());
-                });
-            });
-            
-            // 3. 清理资源
-            sink.onDispose(() -> consumer.close());
-            
-        }, overflowStrategy);
-    }
-}
-```
-
----
-
-### 4.5 state-manager (状态管理器)
-
-**职责**：管理 Job 的状态，支持状态查询和更新。
-
-**核心功能**：
-- 管理不同类型的状态（ValueState、ListState、MapState）
-- 选择不同的状态后端（Memory、RocksDB）
-- 配合 Checkpoint 机制持久化状态
-
-**状态类型**：
+**背压策略详解**：
 
 ```mermaid
 graph LR
+    subgraph "Source产生数据"
+        S[Source<br/>每秒1000条]
+    end
+    
+    subgraph "背压场景"
+        B1[BUFFER策略<br/>缓冲所有数据]
+        B2[DROP策略<br/>丢弃最新数据]
+        B3[LATEST策略<br/>只保留最新]
+        B4[ERROR策略<br/>抛出异常]
+    end
+    
+    subgraph "Sink处理数据"
+        K1[Sink慢<br/>每秒100条]
+    end
+    
+    S --> B1
+    S --> B2
+    S --> B3
+    S --> B4
+    
+    B1 -->|缓冲900条<br/>内存增长| K1
+    B2 -->|丢弃900条<br/>只处理100条| K1
+    B3 -->|丢弃旧数据<br/>只保留1条| K1
+    B4 -->|抛出异常<br/>任务失败| K1
+```
+
+**策略选择指南**：
+
+| 策略 | 适用场景 | 优点 | 缺点 |
+|------|---------|------|------|
+| **BUFFER** | 数据不能丢、内存充足 | 数据不丢失 | 可能 OOM |
+| **DROP** | 实时性高、允许丢数据 | 内存稳定 | 数据丢失 |
+| **LATEST** | 只关心最新状态 | 内存稳定 | 只保留最新 |
+| **ERROR** | 严格要求数据完整性 | 发现问题 | 任务失败 |
+
+**关键难点详解**：
+1. **Scheduler 选择**：不同类型的操作应该用不同的 Scheduler
+   - IO 密集：使用 `Schedulers.boundedElastic()`
+   - CPU 密集：使用 `Schedulers.parallel()`
+   - 简单操作：使用 `Schedulers.immediate()`
+
+2. **背压监控**：如何知道当前是否发生了背压？
+   - 解决方案：使用 Micrometer 监控缓冲区大小、丢弃计数
+
+---
+
+#### 模块 7: state-manager (状态管理器)
+
+**功能**：管理 Job 运行时的状态数据
+
+**意义**：
+- 支持有状态的算子（如窗口聚合、去重等）
+- 提供不同类型的状态存储（Value、List、Map）
+- 配合 Checkpoint 机制实现状态持久化
+
+**难点**：
+- 如何高效地存储和查询状态
+- 如何处理大状态（内存放不下）
+- 如何保证状态的线程安全
+
+**状态类型和存储后端**：
+
+```mermaid
+graph TB
     subgraph "状态类型"
-        ValueState["ValueState<br/>单个值<br/>例：计数器"]
-        ListState["ListState<br/>列表<br/>例：缓冲队列"]
-        MapState["MapState<br/>键值对<br/>例：用户累计金额"]
+        V[ValueState<br/>单个值<br/>例: 计数器]
+        L[ListState<br/>列表<br/>例: 窗口缓冲]
+        M[MapState<br/>键值对<br/>例: 用户状态]
     end
     
-    subgraph "存储后端"
-        Memory["Memory<br/>内存存储<br/>快速但不持久"]
-        RocksDB["RocksDB<br/>磁盘存储<br/>支持大状态"]
+    subgraph "存储后端选择"
+        Decision{状态大小?}
+        
+        Small[小状态<br/>< 10MB]
+        Medium[中等状态<br/>10MB-1GB]
+        Large[大状态<br/>> 1GB]
+        
+        Memory[MemoryBackend<br/>HashMap存储<br/>快速但易丢失]
+        RocksDB[RocksDBBackend<br/>磁盘存储<br/>支持大状态]
+        Distributed[分布式存储<br/>Redis/Ignite<br/>高可用]
     end
     
-    ValueState --> Memory
-    ValueState --> RocksDB
-    ListState --> Memory
-    ListState --> RocksDB
-    MapState --> Memory
-    MapState --> RocksDB
+    subgraph "性能特征"
+        P1[读写速度<br/>Memory > RocksDB > Distributed]
+        P2[容量限制<br/>Distributed > RocksDB > Memory]
+        P3[可靠性<br/>Distributed > RocksDB > Memory]
+    end
+    
+    V --> Decision
+    L --> Decision
+    M --> Decision
+    
+    Decision -->|小| Small
+    Decision -->|中| Medium
+    Decision -->|大| Large
+    
+    Small --> Memory
+    Medium --> RocksDB
+    Large --> Distributed
+    
+    Memory --> P1
+    RocksDB --> P1
+    Distributed --> P1
 ```
 
-**核心接口**：
+**关键难点详解**：
+1. **线程安全**：多个线程可能同时访问状态
+   - 解决方案：使用 ThreadLocal 隔离不同 Job 的状态
+   - 使用 ConcurrentHashMap 或 RocksDB 的原子操作
 
-```java
-/**
- * 状态管理器接口
- */
-public interface StateManager {
-    
-    /**
-     * 获取 ValueState
-     */
-    <T> ValueState<T> getValueState(String name, Class<T> type);
-    
-    /**
-     * 获取 ListState
-     */
-    <T> ListState<T> getListState(String name, Class<T> type);
-    
-    /**
-     * 获取 MapState
-     */
-    <K, V> MapState<K, V> getMapState(String name, Class<K> keyType, Class<V> valueType);
-    
-    /**
-     * 创建 Checkpoint
-     */
-    Checkpoint createCheckpoint(String executionId);
-    
-    /**
-     * 从 Checkpoint 恢复
-     */
-    void restoreFromCheckpoint(Checkpoint checkpoint);
-}
+2. **大状态处理**：状态超过内存怎么办？
+   - 解决方案：使用 RocksDB 作为状态后端，自动溢写到磁盘
+   - 配置 RocksDB 的 block cache 和 write buffer
 
-/**
- * ValueState 接口
- */
-public interface ValueState<T> {
-    T value();
-    void update(T value);
-    void clear();
-}
-
-/**
- * ListState 接口
- */
-public interface ListState<T> {
-    Iterable<T> get();
-    void add(T value);
-    void addAll(List<T> values);
-    void clear();
-}
-
-/**
- * MapState 接口
- */
-public interface MapState<K, V> {
-    V get(K key);
-    void put(K key, V value);
-    void remove(K key);
-    Iterable<Map.Entry<K, V>> entries();
-    void clear();
-}
-```
-
-**实现要点**：
-1. 使用 ThreadLocal 隔离不同 Job 的状态
-2. Memory Backend 使用 ConcurrentHashMap
-3. RocksDB Backend 使用独立的数据库实例
-4. 状态序列化使用高效的序列化框架（Kryo/FST）
-
-**示例**：
-
-```java
-@Service
-public class StateManagerImpl implements StateManager {
-    
-    private final StateBackend backend;
-    private final ThreadLocal<Map<String, Object>> stateContext = new ThreadLocal<>();
-    
-    @Override
-    public <T> ValueState<T> getValueState(String name, Class<T> type) {
-        return new ValueStateImpl<>(name, type, backend);
-    }
-    
-    private static class ValueStateImpl<T> implements ValueState<T> {
-        private final String name;
-        private final Class<T> type;
-        private final StateBackend backend;
-        
-        @Override
-        public T value() {
-            return backend.get(name, type);
-        }
-        
-        @Override
-        public void update(T value) {
-            backend.put(name, value);
-        }
-        
-        @Override
-        public void clear() {
-            backend.remove(name);
-        }
-    }
-}
-```
+3. **状态清理**：如何清理过期状态？
+   - 解决方案：使用 TTL（Time To Live），自动清理过期数据
+   - 定期触发 Compaction，回收空间
 
 ---
 
-### 4.6 checkpoint-manager (断点管理器)
+#### 模块 8: checkpoint-manager (断点管理器)
 
-**职责**：实现 Checkpoint 机制，支持故障恢复和断点续传。
+**功能**：实现 Checkpoint 机制，支持故障恢复和断点续传
 
-**详细设计见第 5 章**。
+**意义**：
+- 让 Job 可以从失败点恢复，避免从头开始
+- 实现 Exactly-Once 语义
+- 支持 Job 的暂停和恢复
 
----
+**难点**：
+- 如何保证 Checkpoint 的一致性（Source、算子状态、Sink 要同步）
+- 如何高效地持久化状态（大状态序列化很慢）
+- 如何管理 Checkpoint 的生命周期（清理旧的）
 
-### 4.7 connector-manager (连接器管理器)
-
-**职责**：管理所有的 Source 和 Sink 连接器，提供插件化扩展。
-
-**核心功能**：
-- 连接器的注册和发现
-- 连接器的配置管理
-- 连接器的生命周期管理
-- 连接池管理
-
-**连接器类型**：
+**Checkpoint 一致性保证机制**：
 
 ```mermaid
 graph TB
-    subgraph "Source 连接器"
-        Kafka[Kafka Source]
-        JDBC[JDBC Source]
-        HTTP[HTTP API Source]
-        File[File Source]
-        MQ[RabbitMQ Source]
+    subgraph "Checkpoint协调"
+        Coordinator[Checkpoint Coordinator]
     end
     
-    subgraph "Sink 连接器"
-        KafkaS[Kafka Sink]
-        JDBCS[JDBC Sink]
-        HTTPS[HTTP API Sink]
-        FileS[File Sink]
-        MQS[RabbitMQ Sink]
+    subgraph "Source"
+        S1[Kafka Source]
+        S2[保存Offset]
+        S3[继续消费]
     end
+    
+    subgraph "算子链"
+        O1[Map算子]
+        O2[Window算子<br/>有状态]
+        O3[保存窗口数据]
+    end
+    
+    subgraph "Sink"
+        K1[JDBC Sink]
+        K2[保存已写入位置]
+        K3[提交事务]
+    end
+    
+    subgraph "存储"
+        Store[(S3/HDFS<br/>持久化存储)]
+    end
+    
+    Coordinator -->|1. 触发Checkpoint| S1
+    S1 -->|2. 插入Barrier| S2
+    S2 --> S3
+    
+    S3 -->|3. Barrier流向下游| O1
+    O1 --> O2
+    O2 -->|4. 保存状态| O3
+    O3 -->|5. Barrier继续传播| K1
+    
+    K1 -->|6. 保存进度| K2
+    K2 -->|7. 两阶段提交| K3
+    
+    S2 -->|8. 持久化| Store
+    O3 -->|8. 持久化| Store
+    K2 -->|8. 持久化| Store
+    
+    Store -->|9. 返回路径| Coordinator
+    Coordinator -->|10. 标记完成| Done[Checkpoint完成]
 ```
 
-**核心接口**：
+**关键难点详解**：
+1. **一致性保证**：如何保证 Source、算子、Sink 的状态是同一时刻的？
+   - 解决方案：使用 Barrier 机制（借鉴 Flink 的 Chandy-Lamport 算法）
+   - Barrier 像一个分隔符，标记 Checkpoint 的边界
 
-```java
-/**
- * 连接器管理器
- */
-public interface ConnectorManager {
-    
-    /**
-     * 注册 Source 连接器
-     */
-    void registerSource(String type, Class<? extends ReactorSource> clazz);
-    
-    /**
-     * 注册 Sink 连接器
-     */
-    void registerSink(String type, Class<? extends ReactorSink> clazz);
-    
-    /**
-     * 创建 Source 实例
-     */
-    <T> ReactorSource<T> createSource(String type, Map<String, Object> config);
-    
-    /**
-     * 创建 Sink 实例
-     */
-    <T> ReactorSink<T> createSink(String type, Map<String, Object> config);
-}
-```
+2. **两阶段提交**：如何保证 Sink 的 Exactly-Once？
+   - 解决方案：Checkpoint 时先预提交，等所有状态都保存成功后再真正提交
+   - 失败时可以回滚
 
-**实现要点**：
-1. 使用 SPI（Service Provider Interface）机制自动发现连接器
-2. 使用工厂模式创建连接器实例
-3. 连接器配置使用 Builder 模式
-4. 提供连接池管理（JDBC、HTTP 等）
-
-**示例**：
-
-```java
-@Service
-public class ConnectorManagerImpl implements ConnectorManager {
-    
-    private Map<String, Class<? extends ReactorSource>> sourceRegistry = new ConcurrentHashMap<>();
-    private Map<String, Class<? extends ReactorSink>> sinkRegistry = new ConcurrentHashMap<>();
-    
-    @PostConstruct
-    public void init() {
-        // 自动发现并注册连接器
-        ServiceLoader.load(ReactorSource.class).forEach(source -> {
-            ConnectorType annotation = source.getClass().getAnnotation(ConnectorType.class);
-            if (annotation != null) {
-                sourceRegistry.put(annotation.value(), source.getClass());
-            }
-        });
-    }
-    
-    @Override
-    public <T> ReactorSource<T> createSource(String type, Map<String, Object> config) {
-        Class<? extends ReactorSource> clazz = sourceRegistry.get(type);
-        if (clazz == null) {
-            throw new ConnectorNotFoundException("Source: " + type);
-        }
-        
-        // 使用反射创建实例并配置
-        try {
-            ReactorSource<T> source = (ReactorSource<T>) clazz.getDeclaredConstructor().newInstance();
-            // 配置属性注入
-            BeanUtils.copyProperties(config, source);
-            return source;
-        } catch (Exception e) {
-            throw new ConnectorCreationException(e);
-        }
-    }
-}
-```
+3. **异步 Checkpoint**：如何避免 Checkpoint 阻塞数据处理？
+   - 解决方案：使用异步序列化和上传，不阻塞主流程
 
 ---
 
-### 4.8 metrics-collector (指标收集器)
+#### 模块 9: connector-manager (连接器管理器)
 
-**职责**：收集 Job 的运行指标，对接监控系统。
+**功能**：管理所有的 Source 和 Sink 连接器
 
-**核心功能**：
-- 收集 Job 执行指标（吞吐量、延迟、错误率等）
-- 收集系统指标（CPU、内存、线程等）
-- 收集 Reactor 指标（缓冲区大小、背压状态等）
-- 对接 Prometheus/Grafana
+**意义**：
+- 提供插件化的连接器扩展机制
+- 统一管理连接器的生命周期
+- 复用连接池，提高效率
 
-**核心指标**：
+**难点**：
+- 如何设计通用的连接器接口
+- 如何支持连接器的动态加载和卸载
+- 如何管理连接池（JDBC、HTTP）
 
-| 指标类别 | 指标名称 | 说明 |
-|---------|---------|------|
-| **Job 指标** | `job_execution_count` | Job 执行次数 |
-| | `job_success_rate` | Job 成功率 |
-| | `job_duration` | Job 执行时长 |
-| **数据指标** | `records_processed` | 处理记录数 |
-| | `records_failed` | 失败记录数 |
-| | `throughput` | 吞吐量（条/秒） |
-| **系统指标** | `cpu_usage` | CPU 使用率 |
-| | `memory_usage` | 内存使用率 |
-| | `thread_count` | 线程数 |
-| **Reactor 指标** | `buffer_size` | 缓冲区大小 |
-| | `backpressure_status` | 背压状态 |
-| | `dropped_records` | 丢弃记录数 |
-
-**实现要点**：
-1. 使用 Micrometer 作为指标收集框架
-2. 集成 Prometheus Pushgateway
-3. 指标数据定期上报（每 10 秒）
-4. 提供 Grafana Dashboard 模板
-
----
-
-## 5. 断点机制设计
-
-### 5.1 什么是 Checkpoint？
-
-Checkpoint（检查点）是将 Job 的当前状态保存下来的机制，用于：
-- **故障恢复**：Job 失败后可以从最近的 Checkpoint 恢复，避免重头开始
-- **断点续传**：批量任务暂停后可以从上次的位置继续执行
-- **Exactly-Once 语义**：配合事务 Sink 实现精确一次处理
-
-### 5.2 Checkpoint 架构
+**连接器类型和配置**：
 
 ```mermaid
 graph TB
-    Job[Job 运行中] --> Trigger[触发 Checkpoint]
+    subgraph "Source连接器"
+        S1[KafkaSource<br/>配置: topic, groupId, servers]
+        S2[JDBCSource<br/>配置: sql, fetchSize, connection]
+        S3[HTTPSource<br/>配置: url, pageSize, headers]
+        S4[FileSource<br/>配置: path, format, compression]
+        S5[CustomSource<br/>用户自定义]
+    end
     
-    Trigger --> Barrier[插入 Barrier]
-    Barrier --> Source[Source 保存偏移量]
-    Barrier --> State[算子保存状态]
+    subgraph "Sink连接器"
+        K1[KafkaSink<br/>配置: topic, servers, serializer]
+        K2[JDBCSink<br/>配置: sql, batchSize, connection]
+        K3[HTTPSink<br/>配置: url, method, headers]
+        K4[FileSink<br/>配置: path, format, compression]
+        K5[CustomSink<br/>用户自定义]
+    end
     
-    Source --> Persist[持久化到存储]
-    State --> Persist
+    subgraph "连接池管理"
+        P1[HikariCP<br/>JDBC连接池]
+        P2[Apache HttpClient<br/>HTTP连接池]
+        P3[Kafka Producer Pool<br/>Kafka生产者池]
+    end
     
-    Persist --> S3[(S3/HDFS)]
-    Persist --> DB[(数据库)]
+    subgraph "配置中心"
+        Config[连接器配置<br/>支持动态更新]
+    end
     
-    S3 --> Record[记录 Checkpoint 元数据]
-    DB --> Record
+    S2 --> P1
+    K2 --> P1
     
-    Record --> Complete[Checkpoint 完成]
-    Complete --> Continue[继续执行]
+    S3 --> P2
+    K3 --> P2
+    
+    K1 --> P3
+    
+    Config --> S1
+    Config --> S2
+    Config --> S3
+    Config --> K1
+    Config --> K2
+    Config --> K3
 ```
 
-### 5.3 Checkpoint 流程
+**关键难点详解**：
+1. **插件化设计**：如何让用户自定义连接器？
+   - 解决方案：使用 Java SPI 机制，自动发现 classpath 中的连接器
+   - 提供 `@ConnectorType` 注解标记连接器类型
 
-**流式任务的 Checkpoint 流程**：
+2. **连接池管理**：如何避免连接泄漏？
+   - 解决方案：使用 Try-with-resources 自动关闭连接
+   - 定期检查连接池状态，清理失效连接
+
+3. **配置热更新**：如何不重启更新连接器配置？
+   - 解决方案：使用 Spring Cloud Config 监听配置变化
+   - 连接器使用 `@RefreshScope` 支持热刷新
+
+---
+
+#### 模块 10: metrics-collector (指标收集器)
+
+**功能**：收集 Job 的运行指标，对接监控系统
+
+**意义**：
+- 实时监控 Job 的运行状态
+- 提供性能分析数据
+- 支持告警和自动化运维
+
+**难点**：
+- 如何高效采集指标，避免影响性能
+- 如何设计合理的指标体系
+- 如何对接不同的监控系统（Prometheus、Grafana）
+
+**指标体系设计**：
 
 ```mermaid
-sequenceDiagram
-    participant Timer as 定时器
-    participant Job as Job Executor
-    participant Source as Source
-    participant Operator as 算子
-    participant State as State Backend
-    participant Storage as 存储(S3/HDFS)
+graph TB
+    subgraph "Job级别指标"
+        J1[执行次数<br/>job_execution_total]
+        J2[执行成功次数<br/>job_execution_success]
+        J3[执行失败次数<br/>job_execution_failure]
+        J4[执行时长<br/>job_execution_duration_seconds]
+        J5[当前状态<br/>job_status]
+    end
     
-    Timer->>Job: 触发 Checkpoint
-    Job->>Source: 保存当前偏移量
-    Source->>State: 写入 Kafka offset
+    subgraph "数据级别指标"
+        D1[处理记录数<br/>records_processed_total]
+        D2[失败记录数<br/>records_failed_total]
+        D3[吞吐量<br/>records_per_second]
+        D4[延迟<br/>processing_latency_seconds]
+    end
     
-    Job->>Operator: 保存算子状态
-    Operator->>State: 写入 Window 数据
+    subgraph "系统级别指标"
+        S1[CPU使用率<br/>process_cpu_usage]
+        S2[内存使用量<br/>jvm_memory_used_bytes]
+        S3[线程数<br/>jvm_threads_live]
+        S4[GC次数<br/>jvm_gc_pause_seconds_count]
+    end
     
-    State->>Storage: 持久化状态文件
-    Storage-->>State: 返回存储路径
+    subgraph "Reactor级别指标"
+        R1[缓冲区大小<br/>reactor_buffer_size]
+        R2[背压状态<br/>reactor_backpressure_status]
+        R3[丢弃记录数<br/>reactor_dropped_total]
+        R4[请求数<br/>reactor_requested_total]
+    end
     
-    State-->>Job: Checkpoint 完成
-    Job->>Job: 记录 Checkpoint 元数据
+    subgraph "Checkpoint级别指标"
+        C1[Checkpoint次数<br/>checkpoint_total]
+        C2[Checkpoint成功率<br/>checkpoint_success_rate]
+        C3[Checkpoint时长<br/>checkpoint_duration_seconds]
+        C4[状态大小<br/>checkpoint_state_size_bytes]
+    end
+    
+    subgraph "监控系统"
+        Prometheus[Prometheus<br/>指标存储]
+        Grafana[Grafana<br/>可视化]
+        Alertmanager[Alertmanager<br/>告警]
+    end
+    
+    J1 --> Prometheus
+    J2 --> Prometheus
+    J3 --> Prometheus
+    J4 --> Prometheus
+    D1 --> Prometheus
+    D2 --> Prometheus
+    R1 --> Prometheus
+    C1 --> Prometheus
+    
+    Prometheus --> Grafana
+    Prometheus --> Alertmanager
 ```
 
-**批量任务的 Checkpoint 流程**：
+**关键难点详解**：
+1. **性能开销**：采集指标会影响 Job 性能吗？
+   - 解决方案：使用 Micrometer 的高性能计数器
+   - 批量上报指标，避免频繁网络请求
+
+2. **指标命名规范**：如何设计易于理解和查询的指标名？
+   - 解决方案：遵循 Prometheus 命名规范
+   - 使用标签（label）区分不同维度
+
+---
+
+## 3. 模块详细设计
+
+### 3.1 job-executor 执行流程详解
+
+**完整的 Job 执行流程**：
 
 ```mermaid
-sequenceDiagram
-    participant Job as Job Executor
-    participant Source as Roller Source
-    participant State as State Backend
-    participant Storage as 存储
+graph TB
+    Start[接收执行请求] --> CreateExecution[创建执行记录<br/>生成executionId]
     
-    Source->>Source: 完成一页数据处理
-    Source->>Job: 通知可以 Checkpoint
+    CreateExecution --> LoadDef[加载Job定义<br/>从job-registry]
     
-    Job->>Source: 保存当前页码
-    Source->>State: 写入 currentPage
+    LoadDef --> CheckRestore{需要恢复?}
+    CheckRestore -->|有Checkpoint| LoadCheckpoint[加载Checkpoint<br/>从checkpoint-manager]
+    CheckRestore -->|无Checkpoint| InitSource[初始化Source]
     
-    State->>Storage: 持久化状态
-    Storage-->>Job: Checkpoint 完成
+    LoadCheckpoint --> RestoreSource[恢复Source状态<br/>Kafka: seekToOffset<br/>HTTP: seekToPage]
+    RestoreSource --> RestoreState[恢复算子状态<br/>Window数据等]
+    RestoreState --> InitSource
     
-    Note over Job: 如果失败，从 currentPage 继续
+    InitSource --> InitSuccess{初始化成功?}
+    InitSuccess -->|失败| InitError[记录错误<br/>状态: INIT_FAILED]
+    InitSuccess -->|成功| InitSink[初始化Sink]
+    
+    InitError --> Retry{可以重试?}
+    Retry -->|是| Delay[延迟重试]
+    Retry -->|否| MarkDead[标记: DEAD]
+    Delay --> CreateExecution
+    MarkDead --> End
+    
+    InitSink --> BuildPipeline[构建Reactor Pipeline]
+    
+    BuildPipeline --> SetupCheckpoint[设置Checkpoint定时器<br/>根据配置间隔]
+    
+    SetupCheckpoint --> Subscribe[订阅执行<br/>状态: RUNNING]
+    
+    Subscribe --> Monitor[监控执行]
+    
+    Monitor --> CheckStatus{检查状态}
+    CheckStatus -->|取消信号| CancelJob[优雅停止<br/>状态: CANCELLING]
+    CheckStatus -->|Checkpoint触发| DoCheckpoint[执行Checkpoint]
+    CheckStatus -->|正常运行| Monitor
+    CheckStatus -->|完成| Complete[标记完成<br/>状态: COMPLETED]
+    CheckStatus -->|出错| ErrorHandle[异常处理]
+    
+    DoCheckpoint --> CheckpointSuccess{成功?}
+    CheckpointSuccess -->|是| Monitor
+    CheckpointSuccess -->|否| CheckpointError[记录失败]
+    CheckpointError --> CheckpointRetry{连续失败?}
+    CheckpointRetry -->|是| ErrorHandle
+    CheckpointRetry -->|否| Monitor
+    
+    CancelJob --> CancelSuccess{取消成功?}
+    CancelSuccess -->|是| MarkCancelled[状态: CANCELLED]
+    CancelSuccess -->|否| ForceKill[强制终止]
+    ForceKill --> MarkCancelled
+    
+    ErrorHandle --> SaveError[保存错误信息<br/>堆栈trace]
+    SaveError --> RetryCheck{可以重试?}
+    RetryCheck -->|是| DelayRetry[延迟后重试]
+    RetryCheck -->|否| MarkFailed[状态: FAILED]
+    
+    DelayRetry --> CreateExecution
+    
+    Complete --> CleanResource[清理资源]
+    MarkCancelled --> CleanResource
+    MarkFailed --> CleanResource
+    MarkDead --> CleanResource
+    
+    CleanResource --> End[结束]
 ```
 
-### 5.4 Checkpoint 数据结构
+**关键步骤说明**：
 
-**Checkpoint 元数据**：
+1. **初始化阶段**：
+   - 加载 Job 定义，解析配置
+   - 检查是否有 Checkpoint 需要恢复
+   - 创建 Source、Sink、算子实例
 
-```java
-public class Checkpoint {
-    private String executionId;        // 执行 ID
-    private long checkpointId;         // Checkpoint 序号
-    private CheckpointType type;       // STREAMING/ROLLER/SQL_TASK
-    private LocalDateTime createTime;  // 创建时间
-    private String storagePath;        // 存储路径（S3/HDFS）
-    private Map<String, Object> stateData;  // 状态数据
-    private CheckpointStatus status;   // 状态（PENDING/COMPLETED/FAILED）
-}
+2. **执行阶段**：
+   - 构建 Reactor Pipeline
+   - 订阅并开始处理数据
+   - 定期执行 Checkpoint
+   - 监控执行状态
+
+3. **异常处理**：
+   - 捕获异常，记录详细信息
+   - 根据重试策略决定是否重试
+   - 超过最大重试次数后标记为 DEAD
+
+---
+
+### 3.2 checkpoint-manager 详细设计
+
+#### 3.2.1 Checkpoint 触发策略
+
+```mermaid
+graph LR
+    subgraph "触发条件"
+        T1[时间间隔<br/>每1分钟]
+        T2[记录数量<br/>每10000条]
+        T3[数据量大小<br/>每100MB]
+        T4[手动触发<br/>API调用]
+    end
+    
+    subgraph "触发决策"
+        D1{当前状态}
+        D2{上次Checkpoint}
+        D3{资源检查}
+    end
+    
+    subgraph "执行Checkpoint"
+        E1[生成checkpointId]
+        E2[保存状态快照]
+        E3[持久化到存储]
+        E4[更新元数据]
+    end
+    
+    subgraph "结果"
+        R1[成功]
+        R2[失败]
+    end
+    
+    T1 --> D1
+    T2 --> D1
+    T3 --> D1
+    T4 --> D1
+    
+    D1 -->|非RUNNING| Reject[拒绝]
+    D1 -->|RUNNING| D2
+    
+    D2 -->|进行中| Reject
+    D2 -->|完成| D3
+    
+    D3 -->|资源不足| Delay[延迟执行]
+    D3 -->|资源充足| E1
+    
+    E1 --> E2 --> E3 --> E4
+    
+    E4 -->|成功| R1
+    E4 -->|失败| R2
+    
+    R2 --> Retry{重试?}
+    Retry -->|是| E1
+    Retry -->|否| Failed[标记失败]
 ```
 
-**三种模式的状态数据**：
+#### 3.2.2 三种模式的 Checkpoint 数据
 
 **STREAMING 模式**：
 ```json
@@ -1151,18 +830,34 @@ public class Checkpoint {
   "checkpoint_id": 123,
   "timestamp": "2024-01-01T10:00:00",
   "source_state": {
-    "kafka_offsets": {
-      "topic-1": {
-        "0": 12345,
-        "1": 23456
+    "type": "kafka",
+    "offsets": {
+      "events-topic": {
+        "partition-0": 12345,
+        "partition-1": 23456,
+        "partition-2": 34567
       }
     }
   },
   "operator_state": {
-    "window_operator": {
-      "user_123": {"count": 100, "sum": 5000},
-      "user_456": {"count": 50, "sum": 2500}
+    "window_operator_1": {
+      "windows": [
+        {
+          "key": "user_123",
+          "start": "2024-01-01T09:55:00",
+          "end": "2024-01-01T10:00:00",
+          "data": {"count": 100, "sum": 5000}
+        }
+      ]
+    },
+    "dedup_operator_1": {
+      "seen_ids": ["id1", "id2", "id3"]
     }
+  },
+  "sink_state": {
+    "type": "kafka",
+    "transaction_id": "txn-123",
+    "committed_offset": 12000
   }
 }
 ```
@@ -1173,9 +868,17 @@ public class Checkpoint {
   "checkpoint_id": 45,
   "timestamp": "2024-01-01T10:00:00",
   "source_state": {
+    "type": "http_api",
     "current_page": 123,
     "page_size": 1000,
-    "total_processed": 123000
+    "total_pages": 500,
+    "last_processed_item_id": "item_123000"
+  },
+  "operator_state": {},
+  "sink_state": {
+    "type": "jdbc",
+    "last_committed_batch": 123,
+    "rows_written": 123000
   }
 }
 ```
@@ -1186,167 +889,89 @@ public class Checkpoint {
   "checkpoint_id": 10,
   "timestamp": "2024-01-01T10:00:00",
   "source_state": {
+    "type": "sql_query",
     "processed_rows": 1000000,
-    "last_processed_id": 999999
+    "last_processed_id": 999999,
+    "result_set_position": 1000000
+  },
+  "operator_state": {},
+  "sink_state": {
+    "type": "file",
+    "file_path": "/output/report.csv",
+    "bytes_written": 52428800
   }
 }
 ```
 
-### 5.5 Checkpoint 触发策略
-
-| 策略 | 说明 | 适用场景 |
-|------|------|----------|
-| **时间间隔** | 每隔固定时间触发 | 流式任务（每 1 分钟） |
-| **记录数量** | 处理固定数量记录后触发 | 批量任务（每 10000 条） |
-| **页面完成** | 每完成一页数据后触发 | 滚动翻页任务 |
-| **手动触发** | 通过 API 手动触发 | 调试和测试 |
-
-### 5.6 故障恢复流程
+#### 3.2.3 故障恢复流程
 
 ```mermaid
 graph TB
-    Start[Job 启动] --> Check{检查 Checkpoint}
+    Start[Job启动] --> Check{检查Checkpoint}
     
-    Check -->|存在| Load[加载最新 Checkpoint]
-    Check -->|不存在| Init[从头开始]
+    Check -->|无Checkpoint| Fresh[全新启动<br/>从头开始]
+    Check -->|有Checkpoint| Load[加载最新Checkpoint]
     
-    Load --> Restore[恢复状态]
-    Restore --> Resume[从断点继续]
+    Load --> Validate{验证Checkpoint}
+    Validate -->|损坏| LoadPrevious{有更早的?}
+    Validate -->|有效| Restore
     
-    Init --> Run[开始执行]
+    LoadPrevious -->|是| Load
+    LoadPrevious -->|否| Fresh
+    
+    Restore[恢复状态] --> RestoreSource[恢复Source<br/>Kafka: seekToOffset<br/>HTTP: seekToPage<br/>SQL: WHERE id > last_id]
+    
+    RestoreSource --> RestoreOperator[恢复算子状态<br/>Window数据<br/>去重Set等]
+    
+    RestoreOperator --> RestoreSink[恢复Sink状态<br/>事务ID<br/>已写入位置]
+    
+    RestoreSink --> Resume[从断点继续]
+    
+    Fresh --> Run[开始执行]
     Resume --> Run
     
-    Run --> Normal[正常运行]
-```
-
-**恢复示例**：
-
-```java
-public class CheckpointManager {
-    
-    /**
-     * 恢复 Job 状态
-     */
-    public void restore(String executionId, ReactorSource<?> source) {
-        // 1. 查找最新的 Checkpoint
-        Checkpoint checkpoint = findLatestCheckpoint(executionId);
-        if (checkpoint == null) {
-            log.info("No checkpoint found, starting from beginning");
-            return;
-        }
-        
-        // 2. 恢复 Source 状态
-        if (source instanceof KafkaReactorSource) {
-            Map<String, Object> kafkaOffsets = 
-                (Map) checkpoint.getStateData().get("kafka_offsets");
-            ((KafkaReactorSource) source).seekToOffsets(kafkaOffsets);
-        } else if (source instanceof HttpApiRollerSource) {
-            int currentPage = (int) checkpoint.getStateData().get("current_page");
-            ((HttpApiRollerSource) source).seekToPage(currentPage);
-        }
-        
-        // 3. 恢复算子状态
-        restoreOperatorState(checkpoint);
-        
-        log.info("Restored from checkpoint: {}", checkpoint.getCheckpointId());
-    }
-}
-```
-
-### 5.7 Checkpoint 清理策略
-
-**保留策略**：
-- 默认保留最近 10 个 Checkpoint
-- 可配置保留时间（如保留 7 天内的）
-- 手动标记的 Checkpoint 永久保留（Savepoint）
-
-**清理流程**：
-```java
-@Scheduled(cron = "0 0 2 * * ?")  // 每天凌晨 2 点执行
-public void cleanOldCheckpoints() {
-    List<Checkpoint> checkpoints = checkpointRepository.findAll();
-    
-    checkpoints.stream()
-        .filter(cp -> !cp.isSavepoint())  // 排除 Savepoint
-        .sorted(Comparator.comparing(Checkpoint::getCreateTime).reversed())
-        .skip(10)  // 保留最新 10 个
-        .forEach(cp -> {
-            // 删除存储文件
-            storage.delete(cp.getStoragePath());
-            // 删除元数据
-            checkpointRepository.delete(cp);
-        });
-}
+    Run --> Monitor[监控运行]
 ```
 
 ---
 
-## 6. 数据库设计
+## 4. 数据库设计
 
-### 6.1 pipeline_job_definition (Job 定义表)
+### 4.1 表结构设计
+
+#### 表 1: pipeline_job_definition
 
 ```sql
 CREATE TABLE pipeline_job_definition (
     id                  BIGSERIAL PRIMARY KEY,
     job_name            VARCHAR(200) NOT NULL UNIQUE,
-    job_type            VARCHAR(50) NOT NULL,  -- STREAMING/BATCH_ROLLER/SQL_TASK
+    job_type            VARCHAR(50) NOT NULL,
     version             INTEGER NOT NULL DEFAULT 1,
-    dag_definition      TEXT NOT NULL,         -- Job 定义的 JSON
+    dag_definition      TEXT NOT NULL,
     description         TEXT,
     enabled             BOOLEAN NOT NULL DEFAULT true,
+    parallelism         INTEGER DEFAULT 1,
+    max_retry_times     INTEGER DEFAULT 3,
     create_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by          VARCHAR(100),
-    updated_by          VARCHAR(100)
+    updated_by          VARCHAR(100),
+    
+    CONSTRAINT chk_parallelism CHECK (parallelism > 0),
+    CONSTRAINT chk_max_retry CHECK (max_retry_times >= 0)
 );
 
--- 索引
 CREATE INDEX idx_job_name ON pipeline_job_definition(job_name);
-CREATE INDEX idx_enabled ON pipeline_job_definition(enabled);
 CREATE INDEX idx_job_type ON pipeline_job_definition(job_type);
+CREATE INDEX idx_enabled ON pipeline_job_definition(enabled);
+CREATE INDEX idx_update_time ON pipeline_job_definition(update_time DESC);
+
+COMMENT ON TABLE pipeline_job_definition IS 'Job定义表，存储所有Job的元数据';
+COMMENT ON COLUMN pipeline_job_definition.dag_definition IS 'Job的DAG定义，JSON格式';
+COMMENT ON COLUMN pipeline_job_definition.parallelism IS 'Job的并行度，同时运行的实例数';
 ```
 
-**字段说明**：
-- `job_name`：Job 唯一名称，不可重复
-- `job_type`：Job 类型，决定执行模式
-- `version`：版本号，每次更新自增
-- `dag_definition`：Job 的完整定义（JSON 格式），包含 Source、Sink、Transform 等
-- `enabled`：是否启用，禁用后不会被调度
-
-**dag_definition JSON 示例**：
-```json
-{
-  "name": "user-sync-job",
-  "type": "BATCH_ROLLER",
-  "source": {
-    "type": "http_api",
-    "config": {
-      "url": "https://api.example.com/users",
-      "page_size": 1000
-    }
-  },
-  "transform": [
-    {"type": "map", "function": "enrichUser"},
-    {"type": "filter", "condition": "user.isActive()"}
-  ],
-  "sink": {
-    "type": "jdbc",
-    "config": {
-      "url": "jdbc:postgresql://localhost:5432/mydb",
-      "table": "users",
-      "batch_size": 1000
-    }
-  },
-  "config": {
-    "checkpoint_interval": 60000,
-    "max_retry_times": 3
-  }
-}
-```
-
----
-
-### 6.2 pipeline_job_execution (Job 执行记录表)
+#### 表 2: pipeline_job_execution
 
 ```sql
 CREATE TABLE pipeline_job_execution (
@@ -1354,71 +979,68 @@ CREATE TABLE pipeline_job_execution (
     execution_id        VARCHAR(100) NOT NULL UNIQUE,
     job_id              BIGINT NOT NULL,
     job_name            VARCHAR(200) NOT NULL,
-    status              VARCHAR(50) NOT NULL,  -- SCHEDULED/INITIALIZING/RUNNING/COMPLETED/FAILED/CANCELLED
+    status              VARCHAR(50) NOT NULL,
     start_time          TIMESTAMP NOT NULL,
     end_time            TIMESTAMP,
-    duration_ms         BIGINT,                -- 执行时长（毫秒）
-    processed_records   BIGINT DEFAULT 0,      -- 处理记录数
-    failed_records      BIGINT DEFAULT 0,      -- 失败记录数
-    error_message       TEXT,                  -- 错误信息
-    error_stack_trace   TEXT,                  -- 错误堆栈
-    checkpoint_path     VARCHAR(500),          -- 最后一次 Checkpoint 路径
-    retry_count         INTEGER DEFAULT 0,     -- 重试次数
-    triggered_by        VARCHAR(100),          -- 触发方式（CRON/MANUAL/EVENT）
+    duration_ms         BIGINT,
+    processed_records   BIGINT DEFAULT 0,
+    failed_records      BIGINT DEFAULT 0,
+    throughput          DECIMAL(10, 2),
+    error_message       TEXT,
+    error_stack_trace   TEXT,
+    checkpoint_path     VARCHAR(500),
+    retry_count         INTEGER DEFAULT 0,
+    triggered_by        VARCHAR(100),
+    instance_id         VARCHAR(100),
     
-    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id)
+    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id) ON DELETE CASCADE,
+    CONSTRAINT chk_retry_count CHECK (retry_count >= 0)
 );
 
--- 索引
 CREATE INDEX idx_execution_id ON pipeline_job_execution(execution_id);
 CREATE INDEX idx_job_id_start_time ON pipeline_job_execution(job_id, start_time DESC);
 CREATE INDEX idx_status ON pipeline_job_execution(status);
-CREATE INDEX idx_job_name ON pipeline_job_execution(job_name);
+CREATE INDEX idx_start_time ON pipeline_job_execution(start_time DESC);
+CREATE INDEX idx_instance_id ON pipeline_job_execution(instance_id);
+
+COMMENT ON TABLE pipeline_job_execution IS 'Job执行记录表';
+COMMENT ON COLUMN pipeline_job_execution.throughput IS '吞吐量，记录/秒';
+COMMENT ON COLUMN pipeline_job_execution.instance_id IS '执行该Job的实例ID';
 ```
 
-**字段说明**：
-- `execution_id`：执行唯一 ID，UUID 格式
-- `status`：执行状态，见生命周期状态机
-- `duration_ms`：执行时长，用于性能分析
-- `processed_records`/`failed_records`：统计处理情况
-- `retry_count`：重试次数，达到上限后放弃
-
----
-
-### 6.3 pipeline_checkpoint (Checkpoint 记录表)
+#### 表 3: pipeline_checkpoint
 
 ```sql
 CREATE TABLE pipeline_checkpoint (
     id                  BIGSERIAL PRIMARY KEY,
     execution_id        VARCHAR(100) NOT NULL,
-    checkpoint_id       BIGINT NOT NULL,       -- Checkpoint 序号
-    checkpoint_type     VARCHAR(50) NOT NULL,  -- STREAMING/ROLLER/SQL_TASK
-    status              VARCHAR(50) NOT NULL,  -- PENDING/COMPLETED/FAILED
-    state_data          JSONB NOT NULL,        -- 状态数据（JSON）
-    storage_path        VARCHAR(500),          -- 存储路径（S3/HDFS）
-    storage_size_bytes  BIGINT,                -- 存储大小
+    checkpoint_id       BIGINT NOT NULL,
+    checkpoint_type     VARCHAR(50) NOT NULL,
+    status              VARCHAR(50) NOT NULL,
+    state_data          JSONB NOT NULL,
+    storage_path        VARCHAR(500),
+    storage_size_bytes  BIGINT,
     create_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     complete_time       TIMESTAMP,
-    is_savepoint        BOOLEAN DEFAULT false, -- 是否为 Savepoint
+    duration_ms         INTEGER,
+    is_savepoint        BOOLEAN DEFAULT false,
     
-    FOREIGN KEY (execution_id) REFERENCES pipeline_job_execution(execution_id),
-    UNIQUE (execution_id, checkpoint_id)
+    FOREIGN KEY (execution_id) REFERENCES pipeline_job_execution(execution_id) ON DELETE CASCADE,
+    UNIQUE (execution_id, checkpoint_id),
+    CONSTRAINT chk_storage_size CHECK (storage_size_bytes >= 0)
 );
 
--- 索引
 CREATE INDEX idx_execution_checkpoint ON pipeline_checkpoint(execution_id, checkpoint_id DESC);
-CREATE INDEX idx_create_time ON pipeline_checkpoint(create_time);
+CREATE INDEX idx_create_time ON pipeline_checkpoint(create_time DESC);
 CREATE INDEX idx_savepoint ON pipeline_checkpoint(is_savepoint) WHERE is_savepoint = true;
+CREATE INDEX idx_status ON pipeline_checkpoint(status);
+
+COMMENT ON TABLE pipeline_checkpoint IS 'Checkpoint记录表';
+COMMENT ON COLUMN pipeline_checkpoint.state_data IS '状态数据，JSONB格式，支持查询';
+COMMENT ON COLUMN pipeline_checkpoint.is_savepoint IS '是否为手动保存点，Savepoint不会被自动清理';
 ```
 
-**字段说明**：
-- `checkpoint_id`：Checkpoint 序号，从 1 开始递增
-- `state_data`：状态数据，使用 JSONB 类型支持查询
-- `is_savepoint`：是否为手动保存点，Savepoint 不会被自动清理
-
----
-
-### 6.4 pipeline_job_config (Job 配置表)
+#### 表 4: pipeline_job_config
 
 ```sql
 CREATE TABLE pipeline_job_config (
@@ -1426,352 +1048,296 @@ CREATE TABLE pipeline_job_config (
     job_id          BIGINT NOT NULL,
     config_key      VARCHAR(200) NOT NULL,
     config_value    TEXT NOT NULL,
-    config_type     VARCHAR(50) NOT NULL,  -- STRING/INT/BOOLEAN/JSON
+    config_type     VARCHAR(50) NOT NULL,
     description     TEXT,
+    is_sensitive    BOOLEAN DEFAULT false,
     create_time     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     
-    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id),
+    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id) ON DELETE CASCADE,
     UNIQUE (job_id, config_key)
 );
 
--- 索引
 CREATE INDEX idx_job_config ON pipeline_job_config(job_id);
+CREATE INDEX idx_config_key ON pipeline_job_config(config_key);
+
+COMMENT ON TABLE pipeline_job_config IS 'Job配置表，存储Job的运行时配置';
+COMMENT ON COLUMN pipeline_job_config.is_sensitive IS '是否为敏感配置（如密码），敏感配置需要加密存储';
 ```
 
-**常用配置项**：
-
-| config_key | config_type | 说明 | 示例值 |
-|-----------|-------------|------|--------|
-| `parallelism` | INT | 并行度 | 4 |
-| `checkpoint.interval` | INT | Checkpoint 间隔（毫秒） | 60000 |
-| `checkpoint.retention` | INT | Checkpoint 保留数量 | 10 |
-| `backpressure.strategy` | STRING | 背压策略 | BUFFER |
-| `source.batch.size` | INT | Source 批量大小 | 100 |
-| `sink.batch.size` | INT | Sink 批量大小 | 1000 |
-| `max.retry.times` | INT | 最大重试次数 | 3 |
-| `retry.interval` | INT | 重试间隔（毫秒） | 5000 |
-
----
-
-### 6.5 pipeline_job_schedule (Job 调度配置表)
+#### 表 5: pipeline_job_schedule
 
 ```sql
 CREATE TABLE pipeline_job_schedule (
     id                  BIGSERIAL PRIMARY KEY,
     job_id              BIGINT NOT NULL,
-    schedule_type       VARCHAR(50) NOT NULL,  -- CRON/MANUAL/EVENT/DEPENDENCY
-    cron_expression     VARCHAR(100),          -- Cron 表达式
-    event_topic         VARCHAR(200),          -- 事件主题
-    dependencies        TEXT,                  -- 依赖的 Job（JSON 数组）
+    schedule_type       VARCHAR(50) NOT NULL,
+    cron_expression     VARCHAR(100),
+    event_topic         VARCHAR(200),
+    dependencies        JSONB,
     enabled             BOOLEAN NOT NULL DEFAULT true,
     last_trigger_time   TIMESTAMP,
     next_trigger_time   TIMESTAMP,
+    trigger_count       BIGINT DEFAULT 0,
     create_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     
-    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id),
+    FOREIGN KEY (job_id) REFERENCES pipeline_job_definition(id) ON DELETE CASCADE,
     UNIQUE (job_id)
 );
 
--- 索引
 CREATE INDEX idx_schedule_job ON pipeline_job_schedule(job_id);
 CREATE INDEX idx_next_trigger ON pipeline_job_schedule(next_trigger_time) WHERE enabled = true;
+CREATE INDEX idx_schedule_type ON pipeline_job_schedule(schedule_type);
+
+COMMENT ON TABLE pipeline_job_schedule IS 'Job调度配置表';
+COMMENT ON COLUMN pipeline_job_schedule.dependencies IS '依赖的Job列表，JSON数组格式';
 ```
 
----
-
-### 6.6 数据库 ER 图
+### 4.2 数据库 ER 图
 
 ```mermaid
 erDiagram
-    pipeline_job_definition ||--o{ pipeline_job_execution : "has many"
-    pipeline_job_definition ||--o{ pipeline_job_config : "has many"
-    pipeline_job_definition ||--o| pipeline_job_schedule : "has one"
-    pipeline_job_execution ||--o{ pipeline_checkpoint : "has many"
+    pipeline_job_definition ||--o{ pipeline_job_execution : "1:N"
+    pipeline_job_definition ||--o{ pipeline_job_config : "1:N"
+    pipeline_job_definition ||--o| pipeline_job_schedule : "1:1"
+    pipeline_job_execution ||--o{ pipeline_checkpoint : "1:N"
     
     pipeline_job_definition {
         bigint id PK
-        varchar job_name UK
-        varchar job_type
-        int version
-        text dag_definition
-        boolean enabled
+        varchar job_name UK "唯一名称"
+        varchar job_type "STREAMING/BATCH_ROLLER/SQL_TASK"
+        int version "版本号"
+        text dag_definition "DAG定义JSON"
+        boolean enabled "是否启用"
+        int parallelism "并行度"
     }
     
     pipeline_job_execution {
         bigint id PK
-        varchar execution_id UK
+        varchar execution_id UK "执行唯一ID"
         bigint job_id FK
-        varchar status
-        timestamp start_time
-        bigint processed_records
+        varchar status "执行状态"
+        timestamp start_time "开始时间"
+        bigint processed_records "处理记录数"
+        int retry_count "重试次数"
     }
     
     pipeline_checkpoint {
         bigint id PK
         varchar execution_id FK
-        bigint checkpoint_id
-        jsonb state_data
-        varchar storage_path
+        bigint checkpoint_id "Checkpoint序号"
+        jsonb state_data "状态数据"
+        varchar storage_path "存储路径"
+        boolean is_savepoint "是否Savepoint"
     }
     
     pipeline_job_config {
         bigint id PK
         bigint job_id FK
-        varchar config_key
-        varchar config_value
+        varchar config_key UK "配置键"
+        text config_value "配置值"
+        boolean is_sensitive "是否敏感"
     }
     
     pipeline_job_schedule {
         bigint id PK
         bigint job_id FK
-        varchar schedule_type
-        varchar cron_expression
+        varchar schedule_type "调度类型"
+        varchar cron_expression "Cron表达式"
+        jsonb dependencies "依赖Job"
     }
 ```
 
 ---
 
-## 7. 开发指南
+## 5. 开发指南
 
-### 7.1 如何开发一个新的 Source Connector？
+### 5.1 开发自定义 Source Connector
 
-**步骤**：
-
-1. **实现 ReactorSource 接口**
+**步骤 1：实现 ReactorSource 接口**
 
 ```java
-@ConnectorType("my-source")  // 连接器类型标识
-public class MyCustomSource implements ReactorSource<MyData> {
+@ConnectorType("custom-api")
+public class CustomApiSource implements ReactorSource<CustomData> {
     
-    private String url;
+    private String apiUrl;
+    private String apiKey;
     private int batchSize;
+    private int rateLimit;  // 每秒请求数限制
     
     @Override
-    public Flux<MyData> flux() {
+    public Flux<CustomData> flux() {
         return Flux.create(sink -> {
-            // 1. 初始化资源（连接、客户端等）
-            MyClient client = new MyClient(url);
+            // 1. 初始化 HTTP 客户端
+            WebClient client = WebClient.builder()
+                .baseUrl(apiUrl)
+                .defaultHeader("Authorization", "Bearer " + apiKey)
+                .build();
+            
+            AtomicLong offset = new AtomicLong(0);
             
             // 2. 响应下游请求
             sink.onRequest(n -> {
                 try {
+                    // 限流控制
+                    rateLimiter.acquire();
+                    
                     // 拉取数据
-                    List<MyData> data = client.fetchBatch(batchSize);
+                    CustomResponse response = client.get()
+                        .uri(uriBuilder -> uriBuilder
+                            .queryParam("offset", offset.get())
+                            .queryParam("limit", batchSize)
+                            .build())
+                        .retrieve()
+                        .bodyToMono(CustomResponse.class)
+                        .block();
+                    
+                    if (response == null || response.getData().isEmpty()) {
+                        sink.complete();
+                        return;
+                    }
                     
                     // 发射数据
-                    data.forEach(sink::next);
+                    response.getData().forEach(sink::next);
+                    offset.addAndGet(response.getData().size());
                     
-                    // 如果没有更多数据，结束流
-                    if (data.isEmpty()) {
-                        sink.complete();
-                    }
                 } catch (Exception e) {
                     sink.error(e);
                 }
             });
             
             // 3. 清理资源
-            sink.onDispose(() -> client.close());
+            sink.onDispose(() -> {
+                // 关闭客户端
+            });
             
         }, FluxSink.OverflowStrategy.BUFFER);
     }
     
     @Override
     public void restore(Checkpoint checkpoint) {
-        // 从 Checkpoint 恢复状态
         if (checkpoint != null) {
             Map<String, Object> state = checkpoint.getStateData();
-            // 恢复到特定位置
+            Long savedOffset = (Long) state.get("offset");
+            if (savedOffset != null) {
+                // 从保存的位置继续
+            }
         }
     }
     
     // Getter/Setter 用于配置注入
-    public void setUrl(String url) { this.url = url; }
+    public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl; }
+    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     public void setBatchSize(int batchSize) { this.batchSize = batchSize; }
 }
 ```
 
-2. **添加 SPI 配置**
+**步骤 2：注册连接器（SPI）**
 
-在 `src/main/resources/META-INF/services/` 目录下创建文件：
-`com.pipeline.connector.ReactorSource`
+创建文件：`src/main/resources/META-INF/services/com.pipeline.connector.ReactorSource`
 
 ```
-com.mycompany.connector.MyCustomSource
+com.example.connector.CustomApiSource
 ```
 
-3. **使用自定义 Source**
+**步骤 3：使用连接器**
 
 ```java
 @Bean
-public PipelineJob myJob() {
+public PipelineJob customJob() {
     return PipelineJob.builder()
-        .source(MyCustomSource.builder()
-            .url("https://api.example.com")
+        .name("custom-api-job")
+        .source(CustomApiSource.builder()
+            .apiUrl("https://api.example.com/data")
+            .apiKey("your-api-key")
             .batchSize(100)
             .build())
-        // ...
+        .transform(flux -> flux
+            .map(this::process)
+            .filter(this::validate)
+        )
+        .sink(jdbcSink())
         .build();
 }
 ```
 
-### 7.2 如何开发一个新的 Sink Connector？
+### 5.2 本地开发环境
 
-**步骤类似**，实现 `ReactorSink` 接口：
+**docker-compose.yml**：
 
-```java
-@ConnectorType("my-sink")
-public class MyCustomSink implements ReactorSink<MyData> {
-    
-    private String targetUrl;
-    private int batchSize;
-    
-    @Override
-    public Mono<Void> consume(Flux<MyData> flux) {
-        return flux
-            .buffer(batchSize)  // 批量处理
-            .flatMap(batch -> {
-                // 批量写入
-                return Mono.fromRunnable(() -> {
-                    MyClient client = new MyClient(targetUrl);
-                    client.batchInsert(batch);
-                    client.close();
-                });
-            })
-            .then();
-    }
-}
-```
-
-### 7.3 如何添加自定义算子？
-
-```java
-public class CustomOperators {
-    
-    /**
-     * 去重算子
-     */
-    public static <T> Function<Flux<T>, Flux<T>> distinct(Function<T, Object> keyExtractor) {
-        return flux -> flux
-            .distinct(keyExtractor);
-    }
-    
-    /**
-     * 限流算子
-     */
-    public static <T> Function<Flux<T>, Flux<T>> rateLimit(int permitsPerSecond) {
-        return flux -> flux
-            .delayElements(Duration.ofMillis(1000 / permitsPerSecond));
-    }
-}
-
-// 使用
-.transform(flux -> flux
-    .transform(CustomOperators.distinct(User::getId))
-    .transform(CustomOperators.rateLimit(100))
-)
-```
-
-### 7.4 本地开发环境搭建
-
-**依赖服务**：
 ```yaml
-version: '3'
+version: '3.8'
 services:
   postgres:
     image: postgres:14
+    container_name: pipeline-postgres
     ports:
       - "5432:5432"
     environment:
       POSTGRES_DB: pipeline
       POSTGRES_USER: pipeline
       POSTGRES_PASSWORD: pipeline123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
   
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: pipeline-kafka
     ports:
       - "9092:9092"
     environment:
+      KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
   
   zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: pipeline-zookeeper
     ports:
       - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  
+  minio:
+    image: minio/minio:latest
+    container_name: pipeline-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+volumes:
+  postgres_data:
+  minio_data:
 ```
 
 **启动命令**：
+
 ```bash
 # 1. 启动依赖服务
 docker-compose up -d
 
-# 2. 初始化数据库
-mvn flyway:migrate
+# 2. 等待服务就绪
+sleep 10
 
-# 3. 启动应用
+# 3. 初始化数据库
+psql -h localhost -U pipeline -d pipeline -f schema.sql
+
+# 4. 启动应用
 mvn spring-boot:run
 ```
 
 ---
 
-## 8. 部署运维
-
-### 8.1 部署架构
-
-```mermaid
-graph TB
-    subgraph "Kubernetes 集群"
-        subgraph "Pipeline Namespace"
-            Pod1[Pipeline Instance 1<br/>运行 Job-A, Job-B]
-            Pod2[Pipeline Instance 2<br/>运行 Job-C, Job-D]
-            Pod3[Pipeline Instance 3<br/>运行 Job-E]
-        end
-        
-        Service[Service<br/>负载均衡]
-        
-        Pod1 --> Service
-        Pod2 --> Service
-        Pod3 --> Service
-    end
-    
-    Ingress[Ingress<br/>外部访问]
-    Ingress --> Service
-    
-    DB[(PostgreSQL<br/>元数据)]
-    S3[(S3/MinIO<br/>Checkpoint)]
-    Kafka[(Kafka<br/>消息队列)]
-    
-    Pod1 --> DB
-    Pod2 --> DB
-    Pod3 --> DB
-    
-    Pod1 --> S3
-    Pod2 --> S3
-    Pod3 --> S3
-    
-    Pod1 --> Kafka
-    Pod2 --> Kafka
-    Pod3 --> Kafka
-```
-
-### 8.2 监控大盘
-
-**关键指标**：
-- Job 执行成功率
-- Job 平均执行时长
-- 数据处理吞吐量
-- Checkpoint 成功率
-- 系统资源使用率
-
-**告警规则**：
-- Job 失败率 > 5%：严重告警
-- Checkpoint 失败：警告
-- 内存使用 > 90%：严重告警
-- 背压持续 > 5 分钟：警告
-
----
-
-**文档版本**：v3.0  
-**最后更新**：2025-11-07  
-**下一步**：请参考开发指南开始编写代码
+**文档版本**：v4.0
+**最后更新**：2025-11-07
+**适用人员**：新加入团队的开发人员
