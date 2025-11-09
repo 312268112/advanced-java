@@ -9,19 +9,20 @@
 ### 1.2 设计目标
 
 - **响应式流处理**：基于Reactor实现非阻塞、背压支持的数据流处理
-- **模块化设计**：清晰的Source、Operator、Sink三层架构，易于扩展
+- **模块化设计**：清晰的任务调度、图转换、执行引擎分层架构
 - **高性能**：充分利用响应式编程的优势，支持高吞吐量数据处理
-- **易用性**：提供简洁的API，降低开发门槛
+- **易用性**：提供简洁的API，支持声明式任务定义
 - **可观测性**：内置监控指标和日志，方便运维调试
+- **可扩展性**：基于Connectors的插件化扩展机制
 
 ### 1.3 核心特性
 
-- 支持多种数据源接入（JDBC、Kafka、HTTP、File等）
-- 丰富的数据转换算子（Map、Filter、FlatMap、Aggregate等）
-- 灵活的数据输出（Database、MQ、File、API等）
+- 声明式任务定义（StreamGraph → JobGraph转换）
+- 灵活的任务调度机制（Job Scheduler）
+- 高效的执行引擎（Job Executor）
+- 丰富的连接器生态（Connectors）
 - 内置背压机制，防止内存溢出
-- 支持有状态计算和窗口操作
-- 支持Checkpoint容错机制
+- 支持有状态计算和检查点容错
 
 ## 2. 系统架构
 
@@ -29,1627 +30,887 @@
 
 ```mermaid
 graph TB
-    subgraph "Data Source Layer"
-        S1[JDBC Source]
-        S2[Kafka Source]
-        S3[HTTP Source]
-        S4[File Source]
+    subgraph "User API Layer"
+        API[Stream API]
+        DSL[Job DSL]
     end
     
-    subgraph "Processing Layer"
-        OP1[Map Operator]
-        OP2[Filter Operator]
-        OP3[FlatMap Operator]
-        OP4[Aggregate Operator]
-        OP5[Window Operator]
+    subgraph "Job Definition Layer"
+        SG[StreamGraph]
+        JG[JobGraph]
     end
     
-    subgraph "Sink Layer"
-        K1[JDBC Sink]
-        K2[Kafka Sink]
-        K3[HTTP Sink]
-        K4[File Sink]
+    subgraph "Scheduling Layer"
+        JS[Job Scheduler]
+        JM[Job Manager]
     end
     
-    subgraph "Core Framework"
+    subgraph "Execution Layer"
+        JE[Job Executor]
         RT[Reactor Runtime]
+    end
+    
+    subgraph "Operator Layer"
+        SRC[Source]
+        OPS[Operators]
+        SNK[Sink]
+    end
+    
+    subgraph "Connector Layer"
+        JDBC[JDBC Connector]
+        KAFKA[Kafka Connector]
+        HTTP[HTTP Connector]
+        FILE[File Connector]
+        CUSTOM[Custom Connectors]
+    end
+    
+    subgraph "Infrastructure Layer"
         SM[State Manager]
         CP[Checkpoint Manager]
         MT[Metrics Collector]
     end
     
-    S1 --> OP1
-    S2 --> OP2
-    S3 --> OP3
-    S4 --> OP4
+    API --> SG
+    DSL --> SG
+    SG --> JG
+    JG --> JS
+    JS --> JM
+    JM --> JE
+    JE --> RT
+    RT --> SRC
+    RT --> OPS
+    RT --> SNK
     
-    OP1 --> OP5
-    OP2 --> OP5
-    OP3 --> OP5
-    OP4 --> OP5
+    SRC -.-> JDBC
+    SRC -.-> KAFKA
+    SRC -.-> HTTP
+    SRC -.-> FILE
+    SNK -.-> JDBC
+    SNK -.-> KAFKA
+    SNK -.-> HTTP
+    SNK -.-> FILE
     
-    OP5 --> K1
-    OP5 --> K2
-    OP5 --> K3
-    OP5 --> K4
+    JDBC -.-> CUSTOM
+    KAFKA -.-> CUSTOM
     
-    RT -.-> S1
-    RT -.-> S2
-    RT -.-> S3
-    RT -.-> S4
-    
-    SM -.-> OP4
-    SM -.-> OP5
-    CP -.-> SM
-    MT -.-> OP1
-    MT -.-> OP2
-    MT -.-> OP3
+    OPS -.-> SM
+    SM -.-> CP
+    JE -.-> MT
 ```
 
 ### 2.2 架构分层说明
 
-#### 2.2.1 数据源层（Source Layer）
-负责从各种外部系统采集数据，将数据转换为响应式流（Flux/Mono）。每个Source都需要实现背压支持，避免生产速度过快导致下游处理不及。
+#### 2.2.1 用户API层（User API Layer）
+提供友好的编程接口，允许用户通过流式API或DSL定义ETL任务。
 
-#### 2.2.2 处理层（Processing Layer）
-核心数据转换层，包含各种Operator算子。每个算子都是无状态或有状态的转换操作，可以链式组合。
+#### 2.2.2 任务定义层（Job Definition Layer）
+- **StreamGraph**：用户定义的逻辑执行图，描述数据流转换关系
+- **JobGraph**：优化后的物理执行图，可实际调度执行
 
-#### 2.2.3 输出层（Sink Layer）
-将处理后的数据输出到目标系统，支持批量写入和流式写入。
+#### 2.2.3 调度层（Scheduling Layer）
+- **Job Scheduler**：负责任务的调度策略（立即执行、定时执行、依赖触发等）
+- **Job Manager**：管理任务的生命周期（创建、启动、停止、重启）
 
-#### 2.2.4 框架核心（Core Framework）
-- **Reactor Runtime**：响应式运行时，管理整个数据流的执行
-- **State Manager**：状态管理器，支持有状态计算
-- **Checkpoint Manager**：检查点管理，实现容错恢复
-- **Metrics Collector**：指标收集器，收集运行时指标
+#### 2.2.4 执行层（Execution Layer）
+- **Job Executor**：任务的实际执行引擎
+- **Reactor Runtime**：响应式运行时环境
+
+#### 2.2.5 算子层（Operator Layer）
+核心的数据处理组件，包括Source、Operator、Sink。
+
+#### 2.2.6 连接器层（Connector Layer）
+提供与各种外部系统交互的能力，采用插件化设计。
+
+#### 2.2.7 基础设施层（Infrastructure Layer）
+提供状态管理、检查点、监控等基础能力。
+
+### 2.3 模块依赖关系图
+
+```mermaid
+graph LR
+    Job --> StreamGraph
+    StreamGraph --> JobGraph
+    JobGraph --> JobScheduler
+    JobScheduler --> JobExecutor
+    JobExecutor --> Source
+    JobExecutor --> Operator
+    JobExecutor --> Sink
+    Source --> Connectors
+    Sink --> Connectors
+    Operator --> StateManager
+    StateManager --> CheckpointManager
+```
 
 ## 3. 核心模块设计
 
-### 3.1 Source模块
+### 3.1 Job模块
 
-#### 3.1.1 接口设计
+#### 3.1.1 设计理念
+
+Job是ETL任务的最小执行单元，封装了完整的数据处理逻辑。每个Job包含唯一标识、配置信息、执行状态等元数据。
+
+#### 3.1.2 Job生命周期
+
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED: create()
+    CREATED --> SCHEDULED: schedule()
+    SCHEDULED --> RUNNING: start()
+    RUNNING --> PAUSED: pause()
+    PAUSED --> RUNNING: resume()
+    RUNNING --> COMPLETED: success
+    RUNNING --> FAILED: error
+    FAILED --> RUNNING: retry()
+    RUNNING --> CANCELLED: cancel()
+    COMPLETED --> [*]
+    FAILED --> [*]
+    CANCELLED --> [*]
+```
+
+#### 3.1.3 Job元数据结构
 
 ```java
-/**
- * 数据源接口
- * 所有数据源必须实现此接口
- */
-public interface DataSource<T> {
-    
-    /**
-     * 获取数据流
-     * @return 响应式数据流
-     */
-    Flux<T> getDataStream();
-    
-    /**
-     * 获取Source配置
-     */
-    SourceConfig getConfig();
-    
-    /**
-     * 启动数据源
-     */
-    void start();
-    
-    /**
-     * 停止数据源
-     */
-    void stop();
-    
-    /**
-     * 获取Source名称
-     */
-    String getName();
+public class Job {
+    private String jobId;              // 任务唯一标识
+    private String jobName;            // 任务名称
+    private JobType jobType;           // 任务类型：STREAMING/BATCH
+    private JobStatus status;          // 任务状态
+    private JobConfig config;          // 任务配置
+    private JobGraph jobGraph;         // 执行图
+    private Instant createTime;        // 创建时间
+    private Instant startTime;         // 启动时间
+    private Instant endTime;           // 结束时间
+    private Map<String, Object> metadata; // 扩展元数据
 }
 ```
 
-#### 3.1.2 核心实现类
+### 3.2 StreamGraph模块
 
-**AbstractDataSource**：提供通用的Source基础实现
+#### 3.2.1 设计理念
+
+StreamGraph是用户定义的逻辑执行图，直接映射用户的API调用。它是一个有向无环图（DAG），节点代表算子，边代表数据流向。
+
+#### 3.2.2 StreamGraph结构
+
+```mermaid
+graph LR
+    SN1[Source Node] --> TN1[Transform Node 1]
+    TN1 --> TN2[Transform Node 2]
+    TN1 --> TN3[Transform Node 3]
+    TN2 --> TN4[Transform Node 4]
+    TN3 --> TN4
+    TN4 --> SK1[Sink Node]
+```
+
+#### 3.2.3 StreamNode定义
+
 ```java
-public abstract class AbstractDataSource<T> implements DataSource<T> {
-    protected final SourceConfig config;
-    protected final MetricsCollector metrics;
-    protected volatile boolean running;
-    
-    // 提供通用的启动、停止、指标收集等功能
-    // 子类只需实现具体的数据读取逻辑
+public class StreamNode {
+    private int nodeId;                    // 节点ID
+    private String operatorName;           // 算子名称
+    private OperatorType operatorType;     // 算子类型
+    private List<StreamEdge> inEdges;      // 输入边
+    private List<StreamEdge> outEdges;     // 输出边
+    private int parallelism;               // 并行度
+    private Map<String, Object> config;    // 节点配置
 }
 ```
 
-**JdbcSource**：从数据库读取数据
+#### 3.2.4 StreamGraph构建
+
+用户通过流式API构建StreamGraph：
+
 ```java
-public class JdbcSource extends AbstractDataSource<Row> {
-    @Override
-    public Flux<Row> getDataStream() {
-        return Flux.defer(() -> {
-            // 使用r2dbc-pool进行响应式数据库查询
-            return connectionFactory.create()
-                .flatMapMany(conn -> conn.createStatement(sql)
-                    .execute())
-                .flatMap(result -> result.map((row, metadata) -> 
-                    convertToRow(row)));
-        })
-        .doOnNext(row -> metrics.recordRead())
-        .onBackpressureBuffer(config.getBufferSize());
-    }
+StreamGraph graph = StreamGraph.builder()
+    .addSource("source-1", new KafkaSource(config))
+    .addOperator("map-1", new MapOperator(mapper))
+    .addOperator("filter-1", new FilterOperator(predicate))
+    .addSink("sink-1", new JdbcSink(config))
+    .connect("source-1", "map-1")
+    .connect("map-1", "filter-1")
+    .connect("filter-1", "sink-1")
+    .build();
+```
+
+### 3.3 JobGraph模块
+
+#### 3.3.1 设计理念
+
+JobGraph是StreamGraph经过优化后的物理执行图。它将可以链接的算子进行合并（Operator Chain），减少序列化开销，并确定资源分配策略。
+
+#### 3.3.2 StreamGraph到JobGraph的转换
+
+```mermaid
+graph TB
+    subgraph "StreamGraph"
+        SN1[Source] --> SN2[Map]
+        SN2 --> SN3[Filter]
+        SN3 --> SN4[Sink]
+    end
+    
+    subgraph "JobGraph Optimization"
+        OPT1[Chain Detection]
+        OPT2[Resource Allocation]
+        OPT3[Parallelism Config]
+    end
+    
+    subgraph "JobGraph"
+        JV1[Job Vertex 1<br/>Source→Map→Filter]
+        JV2[Job Vertex 2<br/>Sink]
+        JV1 --> JV2
+    end
+    
+    SN1 --> OPT1
+    OPT1 --> OPT2
+    OPT2 --> OPT3
+    OPT3 --> JV1
+```
+
+#### 3.3.3 Operator Chain优化
+
+将满足以下条件的算子链接成一个执行单元：
+- 上下游算子的并行度相同
+- 下游算子只有一个输入
+- 上游算子只有一个输出
+- 两个算子的数据传输策略为FORWARD
+
+#### 3.3.4 JobVertex定义
+
+```java
+public class JobVertex {
+    private int vertexId;                      // 顶点ID
+    private String vertexName;                 // 顶点名称
+    private List<StreamNode> chainedNodes;     // 链接的节点列表
+    private List<JobEdge> inputs;              // 输入边
+    private List<JobEdge> outputs;             // 输出边
+    private int parallelism;                   // 并行度
+    private ResourceProfile resourceProfile;   // 资源配置
 }
 ```
 
-**KafkaSource**：从Kafka读取数据
+### 3.4 Job Scheduler模块
+
+#### 3.4.1 设计理念
+
+Job Scheduler负责任务的调度策略，支持多种触发方式：
+- **立即执行**：任务创建后立即执行
+- **定时执行**：按照Cron表达式定时触发
+- **依赖触发**：上游任务完成后触发
+- **事件触发**：外部事件触发
+
+#### 3.4.2 调度策略
+
+```mermaid
+graph TB
+    JS[Job Scheduler]
+    
+    JS --> IMM[Immediate Scheduler<br/>立即执行]
+    JS --> CRON[Cron Scheduler<br/>定时调度]
+    JS --> DEP[Dependency Scheduler<br/>依赖调度]
+    JS --> EVT[Event Scheduler<br/>事件调度]
+    
+    IMM --> JQ[Job Queue]
+    CRON --> JQ
+    DEP --> JQ
+    EVT --> JQ
+    
+    JQ --> JE[Job Executor]
+```
+
+#### 3.4.3 调度器接口
+
 ```java
-public class KafkaSource extends AbstractDataSource<Message> {
-    @Override
-    public Flux<Message> getDataStream() {
-        return KafkaReceiver.create(receiverOptions)
-            .receive()
-            .map(record -> new Message(record))
-            .doOnNext(msg -> metrics.recordRead());
-    }
+public interface JobScheduler {
+    // 提交任务
+    ScheduleResult schedule(Job job, SchedulePolicy policy);
+    
+    // 取消调度
+    void cancel(String jobId);
+    
+    // 暂停调度
+    void pause(String jobId);
+    
+    // 恢复调度
+    void resume(String jobId);
+    
+    // 获取调度状态
+    ScheduleStatus getStatus(String jobId);
 }
 ```
 
-#### 3.1.3 设计要点
-
-1. **背压支持**：使用`onBackpressureBuffer`或`onBackpressureDrop`控制数据流速
-2. **资源管理**：在stop方法中释放连接、文件句柄等资源
-3. **可配置性**：通过SourceConfig统一管理配置项
-4. **监控指标**：记录读取速率、错误率等关键指标
-
-### 3.2 Operator模块
-
-#### 3.2.1 接口设计
+#### 3.4.4 调度策略配置
 
 ```java
-/**
- * 算子接口
- * 负责对数据流进行转换操作
- */
-public interface Operator<IN, OUT> {
-    
-    /**
-     * 应用转换操作
-     * @param input 输入数据流
-     * @return 输出数据流
-     */
-    Flux<OUT> apply(Flux<IN> input);
-    
-    /**
-     * 获取算子名称
-     */
-    String getName();
-    
-    /**
-     * 是否为有状态算子
-     */
-    boolean isStateful();
-}
+// 立即执行
+SchedulePolicy.immediate()
+
+// 每小时执行
+SchedulePolicy.cron("0 0 * * * ?")
+
+// 依赖上游任务
+SchedulePolicy.dependsOn("upstream-job-id")
+
+// 事件触发
+SchedulePolicy.onEvent("data-arrived")
 ```
 
-#### 3.2.2 核心算子实现
+### 3.5 Job Executor模块
 
-**MapOperator**：映射转换
-```java
-public class MapOperator<IN, OUT> implements Operator<IN, OUT> {
-    private final Function<IN, OUT> mapper;
-    
-    @Override
-    public Flux<OUT> apply(Flux<IN> input) {
-        return input.map(mapper)
-            .doOnNext(item -> metrics.recordProcess());
-    }
-}
-```
+#### 3.5.1 设计理念
 
-**FilterOperator**：数据过滤
-```java
-public class FilterOperator<T> implements Operator<T, T> {
-    private final Predicate<T> predicate;
-    
-    @Override
-    public Flux<T> apply(Flux<T> input) {
-        return input.filter(predicate)
-            .doOnDiscard(Object.class, 
-                item -> metrics.recordFiltered());
-    }
-}
-```
+Job Executor是任务的实际执行引擎，负责将JobGraph转换为可执行的Reactor流，并管理执行过程。
 
-**FlatMapOperator**：一对多转换
-```java
-public class FlatMapOperator<IN, OUT> implements Operator<IN, OUT> {
-    private final Function<IN, Publisher<OUT>> mapper;
-    
-    @Override
-    public Flux<OUT> apply(Flux<IN> input) {
-        return input.flatMap(mapper, 
-            config.getConcurrency())
-            .doOnNext(item -> metrics.recordProcess());
-    }
-}
-```
-
-**AggregateOperator**：聚合计算（有状态）
-```java
-public class AggregateOperator<T, ACC> implements Operator<T, ACC> {
-    private final Supplier<ACC> initialState;
-    private final BiFunction<ACC, T, ACC> accumulator;
-    private final StateManager stateManager;
-    
-    @Override
-    public Flux<ACC> apply(Flux<T> input) {
-        return input
-            .scan(initialState.get(), accumulator)
-            .doOnNext(acc -> stateManager.updateState(acc));
-    }
-    
-    @Override
-    public boolean isStateful() {
-        return true;
-    }
-}
-```
-
-**WindowOperator**：窗口计算（有状态）
-```java
-public class WindowOperator<T> implements Operator<T, Flux<T>> {
-    private final Duration windowSize;
-    private final Duration windowSlide;
-    
-    @Override
-    public Flux<Flux<T>> apply(Flux<T> input) {
-        return input.window(windowSize)
-            .doOnNext(window -> metrics.recordWindow());
-    }
-}
-```
-
-#### 3.2.3 算子链（Operator Chain）
-
-```java
-/**
- * 算子链，将多个算子组合成一个处理链路
- */
-public class OperatorChain<IN, OUT> {
-    private final List<Operator<?, ?>> operators;
-    
-    public Flux<OUT> execute(Flux<IN> input) {
-        Flux<?> current = input;
-        for (Operator<?, ?> operator : operators) {
-            current = ((Operator) operator).apply(current);
-        }
-        return (Flux<OUT>) current;
-    }
-    
-    public OperatorChain<IN, OUT> addOperator(Operator<?, ?> operator) {
-        operators.add(operator);
-        return this;
-    }
-}
-```
-
-#### 3.2.4 设计要点
-
-1. **无状态优先**：尽量设计无状态算子，便于水平扩展
-2. **状态管理**：有状态算子需要配合StateManager使用
-3. **异常处理**：使用`onErrorResume`或`retry`处理异常
-4. **性能优化**：使用`publishOn`和`subscribeOn`控制执行线程
-
-### 3.3 Sink模块
-
-#### 3.3.1 接口设计
-
-```java
-/**
- * 数据输出接口
- */
-public interface DataSink<T> {
-    
-    /**
-     * 写入数据
-     * @param dataStream 数据流
-     * @return 完成信号
-     */
-    Mono<Void> write(Flux<T> dataStream);
-    
-    /**
-     * 获取Sink配置
-     */
-    SinkConfig getConfig();
-    
-    /**
-     * 启动Sink
-     */
-    void start();
-    
-    /**
-     * 停止Sink
-     */
-    void stop();
-    
-    /**
-     * 获取Sink名称
-     */
-    String getName();
-}
-```
-
-#### 3.3.2 核心实现类
-
-**AbstractDataSink**：提供通用的Sink基础实现
-```java
-public abstract class AbstractDataSink<T> implements DataSink<T> {
-    protected final SinkConfig config;
-    protected final MetricsCollector metrics;
-    
-    @Override
-    public Mono<Void> write(Flux<T> dataStream) {
-        return dataStream
-            .buffer(config.getBatchSize(), 
-                Duration.ofSeconds(config.getBatchTimeout()))
-            .flatMap(batch -> writeBatch(batch))
-            .then();
-    }
-    
-    /**
-     * 批量写入
-     */
-    protected abstract Mono<Void> writeBatch(List<T> batch);
-}
-```
-
-**JdbcSink**：写入数据库
-```java
-public class JdbcSink extends AbstractDataSink<Row> {
-    
-    @Override
-    protected Mono<Void> writeBatch(List<Row> batch) {
-        return connectionFactory.create()
-            .flatMap(conn -> {
-                Statement statement = conn.createStatement(insertSql);
-                batch.forEach(row -> bindParameters(statement, row));
-                return Flux.from(statement.execute())
-                    .flatMap(Result::getRowsUpdated)
-                    .reduce(0L, Long::sum)
-                    .doOnNext(count -> metrics.recordWrite(count));
-            })
-            .then();
-    }
-}
-```
-
-**KafkaSink**：写入Kafka
-```java
-public class KafkaSink extends AbstractDataSink<Message> {
-    
-    @Override
-    protected Mono<Void> writeBatch(List<Message> batch) {
-        return kafkaSender.send(
-            Flux.fromIterable(batch)
-                .map(msg -> SenderRecord.create(
-                    new ProducerRecord<>(topic, msg.getKey(), msg.getValue()),
-                    msg.getId()
-                ))
-        )
-        .doOnNext(result -> metrics.recordWrite())
-        .then();
-    }
-}
-```
-
-#### 3.3.3 设计要点
-
-1. **批量写入**：使用buffer聚合批量数据，提高写入效率
-2. **错误重试**：实现重试机制，保证数据不丢失
-3. **事务支持**：对于数据库Sink，支持事务写入
-4. **背压处理**：当写入速度跟不上时，利用背压机制通知上游
-
-### 3.4 Pipeline模块
-
-Pipeline是整个ETL任务的编排器，负责将Source、Operator、Sink组合成完整的数据处理流程。
-
-```java
-/**
- * ETL Pipeline
- */
-public class DataPipeline<IN, OUT> {
-    private final DataSource<IN> source;
-    private final OperatorChain<IN, OUT> operatorChain;
-    private final DataSink<OUT> sink;
-    private final PipelineConfig config;
-    
-    /**
-     * 执行Pipeline
-     */
-    public Mono<Void> execute() {
-        return Mono.defer(() -> {
-            // 启动各个组件
-            source.start();
-            sink.start();
-            
-            // 构建数据流
-            Flux<IN> sourceStream = source.getDataStream();
-            Flux<OUT> processedStream = operatorChain.execute(sourceStream);
-            
-            // 写入Sink
-            return sink.write(processedStream)
-                .doFinally(signal -> cleanup());
-        });
-    }
-    
-    private void cleanup() {
-        source.stop();
-        sink.stop();
-    }
-}
-```
-
-### 3.5 状态管理模块
-
-#### 3.5.1 State接口
-
-```java
-/**
- * 状态接口
- */
-public interface State<T> {
-    
-    /**
-     * 获取状态值
-     */
-    T get();
-    
-    /**
-     * 更新状态值
-     */
-    void update(T value);
-    
-    /**
-     * 清空状态
-     */
-    void clear();
-}
-```
-
-#### 3.5.2 StateManager
-
-```java
-/**
- * 状态管理器
- */
-public class StateManager {
-    private final Map<String, State<?>> states = new ConcurrentHashMap<>();
-    private final CheckpointManager checkpointManager;
-    
-    /**
-     * 注册状态
-     */
-    public <T> State<T> registerState(String name, Class<T> type) {
-        State<T> state = new InMemoryState<>();
-        states.put(name, state);
-        return state;
-    }
-    
-    /**
-     * 获取状态
-     */
-    public <T> State<T> getState(String name) {
-        return (State<T>) states.get(name);
-    }
-    
-    /**
-     * 创建快照
-     */
-    public Map<String, Object> snapshot() {
-        return states.entrySet().stream()
-            .collect(Collectors.toMap(
-                Map.Entry::getKey,
-                e -> e.getValue().get()
-            ));
-    }
-    
-    /**
-     * 恢复快照
-     */
-    public void restore(Map<String, Object> snapshot) {
-        snapshot.forEach((key, value) -> {
-            State state = states.get(key);
-            if (state != null) {
-                state.update(value);
-            }
-        });
-    }
-}
-```
-
-### 3.6 检查点模块
-
-```java
-/**
- * 检查点管理器
- */
-public class CheckpointManager {
-    private final Duration checkpointInterval;
-    private final StateManager stateManager;
-    private final CheckpointStorage storage;
-    
-    /**
-     * 定期执行检查点
-     */
-    public Flux<Checkpoint> scheduleCheckpoints() {
-        return Flux.interval(checkpointInterval)
-            .flatMap(tick -> createCheckpoint());
-    }
-    
-    /**
-     * 创建检查点
-     */
-    private Mono<Checkpoint> createCheckpoint() {
-        return Mono.fromCallable(() -> {
-            long checkpointId = System.currentTimeMillis();
-            Map<String, Object> snapshot = stateManager.snapshot();
-            
-            Checkpoint checkpoint = new Checkpoint(checkpointId, snapshot);
-            storage.save(checkpoint);
-            
-            return checkpoint;
-        });
-    }
-    
-    /**
-     * 从检查点恢复
-     */
-    public Mono<Void> restoreFromCheckpoint(long checkpointId) {
-        return storage.load(checkpointId)
-            .doOnNext(checkpoint -> 
-                stateManager.restore(checkpoint.getSnapshot()))
-            .then();
-    }
-}
-```
-
-### 3.7 指标收集模块
-
-```java
-/**
- * 指标收集器
- */
-public class MetricsCollector {
-    private final MeterRegistry registry;
-    
-    // 计数器
-    private final Counter recordsRead;
-    private final Counter recordsProcessed;
-    private final Counter recordsWritten;
-    private final Counter recordsFiltered;
-    private final Counter errors;
-    
-    // 计时器
-    private final Timer processingTime;
-    
-    // 仪表盘
-    private final Gauge backpressure;
-    
-    /**
-     * 记录读取
-     */
-    public void recordRead() {
-        recordsRead.increment();
-    }
-    
-    /**
-     * 记录处理
-     */
-    public void recordProcess() {
-        recordsProcessed.increment();
-    }
-    
-    /**
-     * 记录写入
-     */
-    public void recordWrite(long count) {
-        recordsWritten.increment(count);
-    }
-    
-    /**
-     * 记录耗时
-     */
-    public void recordProcessingTime(Duration duration) {
-        processingTime.record(duration);
-    }
-}
-```
-
-## 4. 关键流程设计
-
-### 4.1 数据流执行流程
+#### 3.5.2 执行流程
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant Pipeline
-    participant Source
-    participant Operator
-    participant Sink
-    participant StateManager
+    participant Scheduler as Job Scheduler
+    participant Executor as Job Executor
+    participant Graph as JobGraph
+    participant Runtime as Reactor Runtime
+    participant Operator as Operators
     
-    Client->>Pipeline: execute()
-    Pipeline->>Source: start()
-    Pipeline->>Sink: start()
+    Scheduler->>Executor: submit(job)
+    Executor->>Executor: validate(job)
+    Executor->>Graph: getJobGraph()
+    Graph-->>Executor: JobGraph
     
-    Pipeline->>Source: getDataStream()
-    Source-->>Pipeline: Flux<IN>
+    Executor->>Executor: buildExecutionPlan()
+    
+    loop For Each JobVertex
+        Executor->>Runtime: createFlux(vertex)
+        Runtime->>Operator: instantiate()
+        Operator-->>Runtime: Flux<T>
+    end
+    
+    Executor->>Runtime: execute()
     
     loop Data Processing
-        Source->>Operator: emit(data)
-        Operator->>Operator: transform(data)
-        
-        alt Stateful Operator
-            Operator->>StateManager: updateState()
-        end
-        
-        Operator->>Sink: send(processed)
-        Sink->>Sink: buffer(data)
-        
-        alt Buffer Full
-            Sink->>Sink: writeBatch()
-        end
+        Runtime->>Operator: process(data)
+        Operator-->>Runtime: result
     end
     
-    Pipeline->>Source: stop()
-    Pipeline->>Sink: stop()
-    Pipeline-->>Client: Mono<Void>
+    Runtime-->>Executor: completion signal
+    Executor-->>Scheduler: report(status)
 ```
 
-### 4.2 检查点流程
+#### 3.5.3 执行器接口
+
+```java
+public interface JobExecutor {
+    // 执行任务
+    Mono<JobResult> execute(Job job);
+    
+    // 停止任务
+    Mono<Void> stop(String jobId);
+    
+    // 获取执行状态
+    ExecutionStatus getStatus(String jobId);
+    
+    // 获取执行指标
+    ExecutionMetrics getMetrics(String jobId);
+}
+```
+
+#### 3.5.4 执行模式
+
+**单机执行模式**
+```mermaid
+graph LR
+    JE[Job Executor] --> T1[Task 1]
+    JE --> T2[Task 2]
+    JE --> T3[Task 3]
+    T1 --> TP[Thread Pool]
+    T2 --> TP
+    T3 --> TP
+```
+
+**分布式执行模式（未来扩展）**
+```mermaid
+graph TB
+    JM[Job Master] --> W1[Worker 1]
+    JM --> W2[Worker 2]
+    JM --> W3[Worker 3]
+    W1 --> T1[Tasks]
+    W2 --> T2[Tasks]
+    W3 --> T3[Tasks]
+```
+
+### 3.6 Source模块
+
+#### 3.6.1 设计理念
+
+Source是数据的入口，负责从外部系统读取数据并转换为响应式流。所有Source实现都必须支持背压机制。
+
+#### 3.6.2 Source类型
+
+```mermaid
+graph TB
+    Source[Source Interface]
+    
+    Source --> BS[Bounded Source<br/>有界数据源]
+    Source --> US[Unbounded Source<br/>无界数据源]
+    
+    BS --> FS[File Source]
+    BS --> JS[JDBC Source]
+    BS --> AS[API Source]
+    
+    US --> KS[Kafka Source]
+    US --> WS[WebSocket Source]
+    US --> SS[Stream Source]
+```
+
+#### 3.6.3 Source接口定义
+
+```java
+public interface DataSource<T> {
+    // 获取数据流
+    Flux<T> getDataStream();
+    
+    // Source类型（有界/无界）
+    SourceType getSourceType();
+    
+    // 是否支持并行读取
+    boolean isParallel();
+    
+    // 生命周期管理
+    void start();
+    void stop();
+}
+```
+
+### 3.7 Operator模块
+
+#### 3.7.1 设计理念
+
+Operator负责数据转换，分为无状态算子和有状态算子。算子可以链接成算子链，提高执行效率。
+
+#### 3.7.2 Operator分类
+
+```mermaid
+graph TB
+    OP[Operator]
+    
+    OP --> SL[Stateless Operators<br/>无状态算子]
+    OP --> SF[Stateful Operators<br/>有状态算子]
+    
+    SL --> MAP[Map]
+    SL --> FILTER[Filter]
+    SL --> FLATMAP[FlatMap]
+    
+    SF --> AGG[Aggregate]
+    SF --> WIN[Window]
+    SF --> JOIN[Join]
+    SF --> DEDUP[Deduplicate]
+```
+
+#### 3.7.3 Operator接口
+
+```java
+public interface Operator<IN, OUT> {
+    // 应用转换
+    Flux<OUT> apply(Flux<IN> input);
+    
+    // 是否有状态
+    boolean isStateful();
+    
+    // 获取算子类型
+    OperatorType getType();
+}
+```
+
+#### 3.7.4 Operator Chain
+
+```mermaid
+graph LR
+    Input[Input Stream] --> OP1[Map Operator]
+    OP1 --> OP2[Filter Operator]
+    OP2 --> OP3[FlatMap Operator]
+    OP3 --> Output[Output Stream]
+    
+    subgraph "Operator Chain"
+        OP1
+        OP2
+        OP3
+    end
+```
+
+### 3.8 Sink模块
+
+#### 3.8.1 设计理念
+
+Sink是数据的出口，负责将处理后的数据写入外部系统。支持批量写入以提高效率。
+
+#### 3.8.2 Sink类型
+
+```mermaid
+graph TB
+    Sink[Sink Interface]
+    
+    Sink --> DB[Database Sink]
+    Sink --> MQ[Message Queue Sink]
+    Sink --> FILE[File Sink]
+    Sink --> API[API Sink]
+    
+    DB --> MYSQL[MySQL Sink]
+    DB --> PG[PostgreSQL Sink]
+    DB --> REDIS[Redis Sink]
+    
+    MQ --> KAFKA[Kafka Sink]
+    MQ --> RABBIT[RabbitMQ Sink]
+    
+    FILE --> LOCAL[Local File Sink]
+    FILE --> S3[S3 Sink]
+```
+
+#### 3.8.3 Sink接口
+
+```java
+public interface DataSink<T> {
+    // 写入数据
+    Mono<Void> write(Flux<T> dataStream);
+    
+    // 是否支持批量写入
+    boolean supportsBatch();
+    
+    // 是否支持事务
+    boolean supportsTransaction();
+    
+    // 生命周期管理
+    void start();
+    void stop();
+}
+```
+
+### 3.9 Connectors模块
+
+#### 3.9.1 设计理念
+
+Connectors提供统一的外部系统连接抽象，采用SPI机制实现插件化扩展。每个Connector可以提供Source和Sink实现。
+
+#### 3.9.2 Connector架构
+
+```mermaid
+graph TB
+    subgraph "Connector Framework"
+        CM[Connector Manager]
+        CR[Connector Registry]
+        CF[Connector Factory]
+    end
+    
+    subgraph "Built-in Connectors"
+        JDBC[JDBC Connector]
+        KAFKA[Kafka Connector]
+        HTTP[HTTP Connector]
+        FILE[File Connector]
+    end
+    
+    subgraph "Custom Connectors"
+        C1[Custom Connector 1]
+        C2[Custom Connector 2]
+    end
+    
+    CM --> CR
+    CM --> CF
+    
+    CR --> JDBC
+    CR --> KAFKA
+    CR --> HTTP
+    CR --> FILE
+    CR --> C1
+    CR --> C2
+    
+    JDBC --> SRC1[Source]
+    JDBC --> SNK1[Sink]
+    KAFKA --> SRC2[Source]
+    KAFKA --> SNK2[Sink]
+```
+
+#### 3.9.3 Connector接口
+
+```java
+public interface Connector {
+    // Connector标识
+    String getType();
+    
+    // 创建Source
+    <T> DataSource<T> createSource(SourceConfig config);
+    
+    // 创建Sink
+    <T> DataSink<T> createSink(SinkConfig config);
+    
+    // 验证配置
+    void validateConfig(ConnectorConfig config);
+    
+    // 获取配置描述
+    ConfigDescriptor getConfigDescriptor();
+}
+```
+
+#### 3.9.4 Connector配置示例
+
+```yaml
+# JDBC Connector配置
+connectors:
+  jdbc:
+    type: jdbc
+    driver: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/db
+    username: user
+    password: password
+    pool:
+      maxSize: 20
+      maxIdleTime: 30m
+      
+# Kafka Connector配置
+  kafka:
+    type: kafka
+    bootstrapServers: localhost:9092
+    consumerGroup: etl-consumer
+    topics:
+      - user-events
+      - order-events
+    properties:
+      enable.auto.commit: false
+      max.poll.records: 500
+```
+
+## 4. 模块交互流程
+
+### 4.1 任务提交与执行流程
 
 ```mermaid
 sequenceDiagram
-    participant Pipeline
-    participant CheckpointManager
-    participant StateManager
-    participant Storage
+    participant User
+    participant API as Stream API
+    participant SG as StreamGraph
+    participant JG as JobGraph
+    participant Scheduler as Job Scheduler
+    participant Executor as Job Executor
+    participant Runtime as Reactor Runtime
     
-    Pipeline->>CheckpointManager: scheduleCheckpoints()
+    User->>API: define job
+    API->>SG: build StreamGraph
+    SG->>SG: validate
+    SG->>JG: optimize & transform
+    JG->>JG: operator chain
+    JG->>JG: resource allocation
     
-    loop Every Interval
-        CheckpointManager->>StateManager: snapshot()
-        StateManager-->>CheckpointManager: Map<String, Object>
-        
-        CheckpointManager->>CheckpointManager: createCheckpoint(snapshot)
-        CheckpointManager->>Storage: save(checkpoint)
-        Storage-->>CheckpointManager: success
-    end
+    User->>Scheduler: submit(job)
+    Scheduler->>Scheduler: schedule policy
+    Scheduler->>Executor: dispatch(job)
     
-    Note over Pipeline,Storage: Failure Recovery
+    Executor->>JG: getJobGraph()
+    Executor->>Runtime: deploy operators
+    Runtime->>Runtime: connect operators
+    Runtime->>Runtime: start execution
     
-    Pipeline->>CheckpointManager: restoreFromCheckpoint(id)
-    CheckpointManager->>Storage: load(id)
-    Storage-->>CheckpointManager: Checkpoint
-    CheckpointManager->>StateManager: restore(snapshot)
-    StateManager-->>CheckpointManager: success
+    Runtime-->>Executor: progress updates
+    Executor-->>Scheduler: status updates
+    Scheduler-->>User: job status
 ```
 
-### 4.3 背压处理流程
-
-```mermaid
-sequenceDiagram
-    participant Source
-    participant Operator
-    participant Sink
-    
-    Source->>Operator: emit(data) [Fast]
-    Operator->>Sink: send(data) [Fast]
-    
-    Note over Sink: Buffer Full
-    
-    Sink-->>Operator: request(0) [Backpressure]
-    Operator-->>Source: request(0) [Backpressure]
-    
-    Note over Source: Pause Emission
-    
-    Sink->>Sink: writeBatch()
-    
-    Note over Sink: Buffer Available
-    
-    Sink-->>Operator: request(n)
-    Operator-->>Source: request(n)
-    
-    Note over Source: Resume Emission
-    
-    Source->>Operator: emit(data)
-    Operator->>Sink: send(data)
-```
-
-### 4.4 错误处理流程
+### 4.2 StreamGraph到JobGraph转换流程
 
 ```mermaid
 flowchart TD
-    A[Data Processing] -->|Error Occurs| B{Error Type}
+    Start[User defines ETL job] --> SG[Build StreamGraph]
+    SG --> Validate{Validate DAG}
+    Validate -->|Invalid| Error[Throw Exception]
+    Validate -->|Valid| Optimize[Optimization Phase]
     
-    B -->|Retriable| C[Retry with Backoff]
-    C -->|Success| D[Continue Processing]
-    C -->|Max Retries| E[Error Handler]
+    Optimize --> Chain[Operator Chain Detection]
+    Chain --> Parallel[Parallelism Configuration]
+    Parallel --> Resource[Resource Allocation]
+    Resource --> JG[Generate JobGraph]
     
-    B -->|Non-Retriable| E
-    
-    E -->|Skip| F[Skip Record & Log]
-    E -->|Fail Fast| G[Stop Pipeline]
-    E -->|Dead Letter| H[Send to DLQ]
-    
-    F --> D
-    H --> D
-    G --> I[Cleanup & Exit]
+    JG --> Schedule[Submit to Scheduler]
 ```
 
-## 5. 使用示例
+### 4.3 任务调度流程
 
-### 5.1 简单的ETL任务
-
-```java
-/**
- * 从MySQL读取数据，过滤后写入Kafka
- */
-public class SimpleETLJob {
+```mermaid
+sequenceDiagram
+    participant User
+    participant Scheduler as Job Scheduler
+    participant Queue as Job Queue
+    participant Executor as Job Executor
+    participant Monitor as Job Monitor
     
-    public static void main(String[] args) {
-        // 1. 配置Source
-        JdbcSourceConfig sourceConfig = JdbcSourceConfig.builder()
-            .url("jdbc:mysql://localhost:3306/db")
-            .username("user")
-            .password("password")
-            .query("SELECT * FROM users WHERE updated_at > ?")
-            .build();
-        
-        DataSource<Row> source = new JdbcSource(sourceConfig);
-        
-        // 2. 配置Operator
-        OperatorChain<Row, UserEvent> chain = new OperatorChain<>();
-        chain.addOperator(new MapOperator<>(row -> convertToUser(row)))
-            .addOperator(new FilterOperator<>(user -> user.getAge() > 18))
-            .addOperator(new MapOperator<>(user -> new UserEvent(user)));
-        
-        // 3. 配置Sink
-        KafkaSinkConfig sinkConfig = KafkaSinkConfig.builder()
-            .bootstrapServers("localhost:9092")
-            .topic("user-events")
-            .batchSize(100)
-            .build();
-        
-        DataSink<UserEvent> sink = new KafkaSink(sinkConfig);
-        
-        // 4. 创建Pipeline
-        DataPipeline<Row, UserEvent> pipeline = DataPipeline.builder()
-            .source(source)
-            .operatorChain(chain)
-            .sink(sink)
-            .build();
-        
-        // 5. 执行
-        pipeline.execute()
-            .doOnError(e -> log.error("Pipeline failed", e))
-            .doOnSuccess(v -> log.info("Pipeline completed"))
-            .block();
-    }
-}
+    User->>Scheduler: submit(job, policy)
+    
+    alt Immediate
+        Scheduler->>Queue: enqueue(job)
+    else Cron
+        Scheduler->>Scheduler: register cron trigger
+        Note over Scheduler: Wait for trigger time
+        Scheduler->>Queue: enqueue(job)
+    else Dependency
+        Scheduler->>Monitor: watch(upstream job)
+        Monitor-->>Scheduler: upstream completed
+        Scheduler->>Queue: enqueue(job)
+    end
+    
+    Queue->>Executor: dispatch(job)
+    Executor->>Executor: execute
+    Executor-->>Monitor: report status
+    Monitor-->>User: notify completion
 ```
 
-### 5.2 有状态的聚合任务
+### 4.4 数据流执行流程
 
-```java
-/**
- * 实时统计每个用户的访问次数
- */
-public class AggregationJob {
+```mermaid
+sequenceDiagram
+    participant Source
+    participant Op1 as Operator 1
+    participant Op2 as Operator 2
+    participant Sink
+    participant State as State Manager
     
-    public static void main(String[] args) {
-        // Source: Kafka
-        KafkaSource source = new KafkaSource(kafkaConfig);
-        
-        // Operator Chain
-        OperatorChain<Message, UserStats> chain = new OperatorChain<>();
-        
-        // 1. 解析消息
-        chain.addOperator(new MapOperator<>(msg -> parseEvent(msg)));
-        
-        // 2. 按用户ID分组窗口聚合
-        chain.addOperator(new WindowOperator<>(
-            Duration.ofMinutes(5),
-            Duration.ofMinutes(1)
-        ));
-        
-        // 3. 聚合计算
-        chain.addOperator(new AggregateOperator<>(
-            () -> new HashMap<String, Long>(),
-            (map, event) -> {
-                map.merge(event.getUserId(), 1L, Long::sum);
-                return map;
-            }
-        ));
-        
-        // 4. 转换为输出格式
-        chain.addOperator(new FlatMapOperator<>(map -> 
-            Flux.fromIterable(map.entrySet())
-                .map(entry -> new UserStats(entry.getKey(), entry.getValue()))
-        ));
-        
-        // Sink: Redis
-        RedisSink sink = new RedisSink(redisConfig);
-        
-        // Pipeline配置
-        PipelineConfig config = PipelineConfig.builder()
-            .checkpointInterval(Duration.ofMinutes(1))
-            .enableMetrics(true)
-            .build();
-        
-        DataPipeline<Message, UserStats> pipeline = DataPipeline.builder()
-            .source(source)
-            .operatorChain(chain)
-            .sink(sink)
-            .config(config)
-            .build();
-        
-        // 执行
-        pipeline.execute().block();
-    }
-}
+    Source->>Source: read data
+    Source->>Op1: emit(data)
+    
+    Op1->>Op1: transform
+    alt Stateful
+        Op1->>State: get state
+        State-->>Op1: state value
+        Op1->>State: update state
+    end
+    Op1->>Op2: emit(result)
+    
+    Op2->>Op2: transform
+    Op2->>Sink: emit(result)
+    
+    Sink->>Sink: buffer
+    alt Buffer Full
+        Sink->>Sink: flush batch
+    end
 ```
 
-### 5.3 使用Fluent API
+### 4.5 检查点协调流程
 
-```java
-/**
- * 使用链式API构建Pipeline
- */
-public class FluentAPIExample {
+```mermaid
+sequenceDiagram
+    participant Coordinator as Checkpoint Coordinator
+    participant Source
+    participant Operator
+    participant Sink
+    participant Storage
     
-    public static void main(String[] args) {
-        Pipeline.create()
-            // Source
-            .fromJdbc(jdbcConfig)
-            
-            // Operators
-            .map(row -> convertToUser(row))
-            .filter(user -> user.isActive())
-            .flatMap(user -> enrichUserData(user))
-            
-            // Window & Aggregate
-            .window(Duration.ofMinutes(5))
-            .reduce(new HashMap<>(), (map, user) -> {
-                map.merge(user.getCity(), 1L, Long::sum);
-                return map;
-            })
-            
-            // Sink
-            .toKafka(kafkaConfig)
-            
-            // Execute
-            .execute()
-            .subscribe(
-                null,
-                error -> log.error("Error", error),
-                () -> log.info("Completed")
-            );
-    }
-}
+    Coordinator->>Source: trigger checkpoint(id)
+    Source->>Source: snapshot state
+    Source->>Operator: barrier(id)
+    Source-->>Coordinator: ack(id)
+    
+    Operator->>Operator: snapshot state
+    Operator->>Sink: barrier(id)
+    Operator-->>Coordinator: ack(id)
+    
+    Sink->>Sink: snapshot state
+    Sink-->>Coordinator: ack(id)
+    
+    Coordinator->>Storage: persist checkpoint(id)
+    Storage-->>Coordinator: success
+    Coordinator->>Coordinator: checkpoint completed
 ```
 
-## 6. 开发指南
+## 5. 关键设计决策
 
-### 6.1 开发环境准备
+### 5.1 为什么需要StreamGraph和JobGraph两层抽象？
 
-#### 6.1.1 依赖管理
+**StreamGraph（逻辑图）**
+- 直接映射用户API，保持代码的清晰性
+- 方便调试和问题定位
+- 支持多种优化策略
 
-Maven依赖配置：
+**JobGraph（物理图）**
+- 优化后的执行计划，提高运行效率
+- 算子链合并，减少序列化开销
+- 资源分配和并行度配置
 
-```xml
-<dependencies>
-    <!-- Reactor Core -->
-    <dependency>
-        <groupId>io.projectreactor</groupId>
-        <artifactId>reactor-core</artifactId>
-        <version>3.5.0</version>
-    </dependency>
-    
-    <!-- Reactor Kafka -->
-    <dependency>
-        <groupId>io.projectreactor.kafka</groupId>
-        <artifactId>reactor-kafka</artifactId>
-        <version>1.3.12</version>
-    </dependency>
-    
-    <!-- R2DBC for reactive database access -->
-    <dependency>
-        <groupId>io.r2dbc</groupId>
-        <artifactId>r2dbc-pool</artifactId>
-        <version>1.0.0.RELEASE</version>
-    </dependency>
-    
-    <!-- Micrometer for metrics -->
-    <dependency>
-        <groupId>io.micrometer</groupId>
-        <artifactId>micrometer-core</artifactId>
-        <version>1.10.0</version>
-    </dependency>
-    
-    <!-- Testing -->
-    <dependency>
-        <groupId>io.projectreactor</groupId>
-        <artifactId>reactor-test</artifactId>
-        <version>3.5.0</version>
-        <scope>test</scope>
-    </dependency>
-</dependencies>
-```
+### 5.2 Job Scheduler的设计考虑
 
-#### 6.1.2 项目结构
+**多种调度策略支持**
+- 满足不同场景需求（实时、定时、依赖）
+- 支持复杂的工作流编排
 
-```
-reactive-etl-framework/
-├── etl-core/                    # 核心框架
-│   ├── api/                     # API接口定义
-│   ├── runtime/                 # 运行时实现
-│   ├── state/                   # 状态管理
-│   └── checkpoint/              # 检查点
-├── etl-connectors/              # 连接器
-│   ├── jdbc/                    # JDBC连接器
-│   ├── kafka/                   # Kafka连接器
-│   ├── http/                    # HTTP连接器
-│   └── file/                    # 文件连接器
-├── etl-operators/               # 算子库
-│   ├── transform/               # 转换算子
-│   ├── aggregate/               # 聚合算子
-│   └── window/                  # 窗口算子
-├── etl-metrics/                 # 监控指标
-├── etl-examples/                # 示例代码
-└── etl-tests/                   # 集成测试
-```
+**任务优先级**
+- 支持任务优先级设置
+- 避免低优先级任务饥饿
 
-### 6.2 自定义Source开发
+**资源感知调度**
+- 根据资源使用情况调度任务
+- 避免资源竞争
 
-实现自定义Source的步骤：
+### 5.3 响应式设计的优势
 
-```java
-/**
- * 自定义HTTP Source示例
- */
-public class CustomHttpSource extends AbstractDataSource<HttpResponse> {
-    
-    private final WebClient webClient;
-    private final String url;
-    private final Duration pollingInterval;
-    
-    public CustomHttpSource(HttpSourceConfig config) {
-        super(config);
-        this.url = config.getUrl();
-        this.pollingInterval = config.getPollingInterval();
-        this.webClient = WebClient.builder()
-            .baseUrl(url)
-            .build();
-    }
-    
-    @Override
-    public Flux<HttpResponse> getDataStream() {
-        return Flux.interval(pollingInterval)
-            .flatMap(tick -> fetchData())
-            .doOnNext(response -> metrics.recordRead())
-            .onBackpressureBuffer(config.getBufferSize())
-            .doOnError(e -> log.error("Error fetching data", e))
-            .retry(3);
-    }
-    
-    private Mono<HttpResponse> fetchData() {
-        return webClient.get()
-            .retrieve()
-            .bodyToMono(HttpResponse.class)
-            .timeout(Duration.ofSeconds(30));
-    }
-    
-    @Override
-    public void start() {
-        log.info("Starting HTTP Source: {}", url);
-        running = true;
-    }
-    
-    @Override
-    public void stop() {
-        log.info("Stopping HTTP Source: {}", url);
-        running = false;
-    }
-}
-```
+**背压机制**
+- 自动调节数据流速
+- 防止内存溢出
 
-**开发要点**：
-1. 继承`AbstractDataSource`复用通用逻辑
-2. 实现`getDataStream()`方法返回响应式流
-3. 正确处理背压（使用buffer或drop策略）
-4. 添加错误处理和重试机制
-5. 记录监控指标
+**非阻塞IO**
+- 高效利用系统资源
+- 支持高并发
 
-### 6.3 自定义Operator开发
+**组合性**
+- 算子可自由组合
+- 代码简洁清晰
 
-```java
-/**
- * 自定义去重算子
- */
-public class DeduplicateOperator<T> implements Operator<T, T> {
-    
-    private final Function<T, String> keyExtractor;
-    private final Duration windowDuration;
-    private final StateManager stateManager;
-    
-    public DeduplicateOperator(Function<T, String> keyExtractor, 
-                               Duration windowDuration) {
-        this.keyExtractor = keyExtractor;
-        this.windowDuration = windowDuration;
-        this.stateManager = new StateManager();
-    }
-    
-    @Override
-    public Flux<T> apply(Flux<T> input) {
-        State<Set<String>> seenKeys = stateManager.registerState(
-            "seen-keys", 
-            (Class<Set<String>>) (Class<?>) Set.class
-        );
-        
-        return input
-            .filter(item -> {
-                String key = keyExtractor.apply(item);
-                Set<String> seen = seenKeys.get();
-                
-                if (seen == null) {
-                    seen = ConcurrentHashMap.newKeySet();
-                    seenKeys.update(seen);
-                }
-                
-                boolean isNew = seen.add(key);
-                if (!isNew) {
-                    metrics.recordDuplicate();
-                }
-                return isNew;
-            })
-            .doOnNext(item -> metrics.recordProcess());
-    }
-    
-    @Override
-    public String getName() {
-        return "deduplicate";
-    }
-    
-    @Override
-    public boolean isStateful() {
-        return true;
-    }
-}
-```
+### 5.4 Connector插件化设计
 
-**开发要点**：
-1. 实现`Operator`接口
-2. 无状态算子直接使用Reactor的操作符
-3. 有状态算子需要使用StateManager管理状态
-4. 注意线程安全（使用ConcurrentHashMap等）
-5. 正确标识算子是否有状态
+**SPI机制**
+- 支持第三方扩展
+- 无需修改核心代码
 
-### 6.4 自定义Sink开发
+**统一抽象**
+- 降低学习成本
+- 代码可复用
 
-```java
-/**
- * 自定义ElasticSearch Sink
- */
-public class ElasticsearchSink extends AbstractDataSink<Document> {
-    
-    private final RestClient esClient;
-    private final String indexName;
-    
-    public ElasticsearchSink(EsSinkConfig config) {
-        super(config);
-        this.indexName = config.getIndexName();
-        this.esClient = RestClient.builder(
-            new HttpHost(config.getHost(), config.getPort())
-        ).build();
-    }
-    
-    @Override
-    protected Mono<Void> writeBatch(List<Document> batch) {
-        return Mono.fromCallable(() -> {
-            BulkRequest bulkRequest = new BulkRequest();
-            
-            batch.forEach(doc -> {
-                IndexRequest request = new IndexRequest(indexName)
-                    .id(doc.getId())
-                    .source(doc.toMap());
-                bulkRequest.add(request);
-            });
-            
-            BulkResponse response = esClient.bulk(bulkRequest);
-            
-            if (response.hasFailures()) {
-                log.error("Bulk write failed: {}", 
-                    response.buildFailureMessage());
-                throw new RuntimeException("ES write failed");
-            }
-            
-            metrics.recordWrite(batch.size());
-            return null;
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .then();
-    }
-    
-    @Override
-    public void stop() {
-        try {
-            esClient.close();
-        } catch (IOException e) {
-            log.error("Error closing ES client", e);
-        }
-    }
-}
-```
+**配置驱动**
+- 无需编译
+- 灵活配置
 
-**开发要点**：
-1. 继承`AbstractDataSink`自动获得批处理能力
-2. 实现`writeBatch()`方法执行批量写入
-3. 对于阻塞IO，使用`subscribeOn(Schedulers.boundedElastic())`
-4. 实现错误处理和重试逻辑
-5. 在stop方法中释放资源
+## 6. 配置管理
 
-### 6.5 单元测试
-
-```java
-/**
- * 使用Reactor Test进行单元测试
- */
-public class OperatorTest {
-    
-    @Test
-    public void testMapOperator() {
-        MapOperator<Integer, String> operator = 
-            new MapOperator<>(i -> "value-" + i);
-        
-        Flux<Integer> input = Flux.just(1, 2, 3);
-        
-        StepVerifier.create(operator.apply(input))
-            .expectNext("value-1")
-            .expectNext("value-2")
-            .expectNext("value-3")
-            .verifyComplete();
-    }
-    
-    @Test
-    public void testFilterOperator() {
-        FilterOperator<Integer> operator = 
-            new FilterOperator<>(i -> i % 2 == 0);
-        
-        Flux<Integer> input = Flux.just(1, 2, 3, 4, 5);
-        
-        StepVerifier.create(operator.apply(input))
-            .expectNext(2, 4)
-            .verifyComplete();
-    }
-    
-    @Test
-    public void testBackpressure() {
-        Flux<Integer> source = Flux.range(1, 100)
-            .onBackpressureBuffer(10);
-        
-        StepVerifier.create(source, 5)
-            .expectNext(1, 2, 3, 4, 5)
-            .thenRequest(5)
-            .expectNext(6, 7, 8, 9, 10)
-            .thenCancel()
-            .verify();
-    }
-}
-```
-
-### 6.6 性能调优建议
-
-#### 6.6.1 并发控制
-
-```java
-// 使用flatMap的并发参数控制并行度
-flux.flatMap(item -> processAsync(item), 
-    16,  // 最大并发数
-    1    // prefetch
-);
-
-// 使用parallel进行并行处理
-flux.parallel(Runtime.getRuntime().availableProcessors())
-    .runOn(Schedulers.parallel())
-    .map(item -> process(item))
-    .sequential();
-```
-
-#### 6.6.2 线程模型
-
-```java
-// Source在IO线程池执行
-source.getDataStream()
-    .subscribeOn(Schedulers.boundedElastic())
-    
-// CPU密集型操作在parallel线程池执行
-    .publishOn(Schedulers.parallel())
-    .map(item -> cpuIntensiveProcess(item))
-    
-// Sink在IO线程池执行
-    .publishOn(Schedulers.boundedElastic())
-    .flatMap(item -> sink.write(item));
-```
-
-#### 6.6.3 批处理优化
-
-```java
-// 使用buffer提高批量处理效率
-flux.buffer(100, Duration.ofSeconds(5))
-    .flatMap(batch -> sink.writeBatch(batch));
-
-// 使用bufferTimeout兼顾延迟和吞吐
-flux.bufferTimeout(100, Duration.ofSeconds(1))
-    .flatMap(batch -> processBatch(batch));
-```
-
-#### 6.6.4 内存管理
-
-```java
-// 限制内存中的元素数量
-flux.onBackpressureBuffer(
-    1000,  // 最大buffer大小
-    BufferOverflowStrategy.DROP_OLDEST
-);
-
-// 使用limitRate控制请求速率
-flux.limitRate(100);
-```
-
-## 7. 监控和运维
-
-### 7.1 监控指标
-
-框架内置了以下监控指标：
-
-| 指标名称 | 类型 | 说明 |
-| --- | --- | --- |
-| records.read | Counter | 读取的记录数 |
-| records.processed | Counter | 处理的记录数 |
-| records.written | Counter | 写入的记录数 |
-| records.filtered | Counter | 过滤掉的记录数 |
-| records.error | Counter | 错误记录数 |
-| processing.time | Timer | 处理耗时 |
-| backpressure.events | Counter | 背压事件次数 |
-| checkpoint.count | Counter | 检查点次数 |
-| checkpoint.duration | Timer | 检查点耗时 |
-
-### 7.2 日志规范
-
-```java
-// 使用结构化日志
-log.info("Pipeline started", 
-    kv("pipelineId", pipelineId),
-    kv("source", source.getName()),
-    kv("sink", sink.getName())
-);
-
-// 记录关键事件
-log.info("Checkpoint created",
-    kv("checkpointId", checkpointId),
-    kv("stateSize", stateSize),
-    kv("duration", duration)
-);
-
-// 错误日志包含上下文
-log.error("Failed to process record",
-    kv("recordId", record.getId()),
-    kv("attempt", retryCount),
-    e
-);
-```
-
-### 7.3 健康检查
-
-```java
-/**
- * 健康检查接口
- */
-public class PipelineHealthCheck {
-    
-    public HealthStatus check() {
-        HealthStatus status = new HealthStatus();
-        
-        // 检查Source状态
-        status.addComponent("source", 
-            source.isRunning() ? "UP" : "DOWN");
-        
-        // 检查Sink状态
-        status.addComponent("sink", 
-            sink.isRunning() ? "UP" : "DOWN");
-        
-        // 检查背压情况
-        long backpressureCount = metrics.getBackpressureCount();
-        status.addMetric("backpressure", backpressureCount);
-        
-        // 检查最后一次检查点时间
-        long lastCheckpoint = checkpointManager.getLastCheckpointTime();
-        long timeSinceCheckpoint = System.currentTimeMillis() - lastCheckpoint;
-        status.addMetric("timeSinceLastCheckpoint", timeSinceCheckpoint);
-        
-        return status;
-    }
-}
-```
-
-## 8. 最佳实践
-
-### 8.1 错误处理最佳实践
-
-```java
-// 1. 使用retry处理临时性错误
-flux.retry(3, e -> e instanceof TemporaryException);
-
-// 2. 使用onErrorResume提供降级方案
-flux.onErrorResume(e -> {
-    log.error("Error occurred, using fallback", e);
-    return Flux.just(fallbackValue);
-});
-
-// 3. 使用onErrorContinue跳过错误记录
-flux.onErrorContinue((e, item) -> {
-    log.error("Failed to process item: {}", item, e);
-    metrics.recordError();
-});
-
-// 4. Dead Letter Queue模式
-flux.onErrorResume(e -> {
-    deadLetterQueue.send(item);
-    return Mono.empty();
-});
-```
-
-### 8.2 性能优化最佳实践
-
-```java
-// 1. 合理设置buffer大小
-source.getDataStream()
-    .onBackpressureBuffer(
-        1000,  // 根据内存和延迟要求调整
-        BufferOverflowStrategy.ERROR
-    );
-
-// 2. 批量处理
-flux.bufferTimeout(100, Duration.ofSeconds(1))
-    .flatMap(batch -> sink.writeBatch(batch));
-
-// 3. 并行处理
-flux.parallel(parallelism)
-    .runOn(Schedulers.parallel())
-    .map(item -> process(item))
-    .sequential();
-
-// 4. 资源池化
-// 使用连接池避免频繁创建连接
-ConnectionFactory factory = ConnectionFactories.get(
-    ConnectionFactoryOptions.builder()
-        .option(POOL_MAX_SIZE, 20)
-        .build()
-);
-```
-
-### 8.3 状态管理最佳实践
-
-```java
-// 1. 状态尽量小
-// 只保留必要的状态信息，避免OOM
-
-// 2. 定期清理状态
-stateManager.scheduleCleanup(Duration.ofHours(1));
-
-// 3. 状态持久化
-checkpointManager.enablePersistence(storageConfig);
-
-// 4. 状态分区
-// 对于大状态，按key分区管理
-StatePartitioner<String> partitioner = 
-    new HashStatePartitioner<>(16);
-```
-
-### 8.4 测试最佳实践
-
-```java
-// 1. 使用TestPublisher模拟Source
-TestPublisher<Integer> testSource = TestPublisher.create();
-operator.apply(testSource.flux())
-    .subscribe(testSubscriber);
-
-testSource.next(1, 2, 3);
-testSource.complete();
-
-// 2. 使用StepVerifier验证输出
-StepVerifier.create(pipeline.execute())
-    .expectNext(expected1, expected2)
-    .expectComplete()
-    .verify(Duration.ofSeconds(10));
-
-// 3. 测试背压行为
-StepVerifier.create(source.getDataStream(), 0)
-    .expectSubscription()
-    .thenRequest(10)
-    .expectNextCount(10)
-    .thenCancel()
-    .verify();
-
-// 4. 测试错误处理
-StepVerifier.create(operator.apply(errorFlux))
-    .expectError(ExpectedException.class)
-    .verify();
-```
-
-## 9. 扩展性设计
-
-### 9.1 SPI机制
-
-框架支持通过SPI机制扩展Source、Operator、Sink。
-
-```java
-// 定义SPI接口
-public interface SourceProvider {
-    String getType();
-    DataSource<?> createSource(Config config);
-}
-
-// 实现Provider
-public class JdbcSourceProvider implements SourceProvider {
-    @Override
-    public String getType() {
-        return "jdbc";
-    }
-    
-    @Override
-    public DataSource<?> createSource(Config config) {
-        return new JdbcSource(config);
-    }
-}
-
-// 在META-INF/services中注册
-// META-INF/services/com.example.etl.spi.SourceProvider
-com.example.etl.jdbc.JdbcSourceProvider
-```
-
-### 9.2 插件系统
-
-```java
-/**
- * 插件接口
- */
-public interface Plugin {
-    void initialize(PluginContext context);
-    void destroy();
-}
-
-/**
- * 插件管理器
- */
-public class PluginManager {
-    private final List<Plugin> plugins = new ArrayList<>();
-    
-    public void loadPlugin(Class<? extends Plugin> pluginClass) {
-        Plugin plugin = pluginClass.getDeclaredConstructor().newInstance();
-        plugin.initialize(context);
-        plugins.add(plugin);
-    }
-    
-    public void destroyAll() {
-        plugins.forEach(Plugin::destroy);
-    }
-}
-```
-
-## 10. 未来规划
-
-### 10.1 近期规划
-
-1. **完善连接器生态**
-   - 支持更多数据源（MongoDB、ClickHouse、HBase等）
-   - 实现常用的Sink（Redis、ElasticSearch、S3等）
-
-2. **增强状态管理**
-   - 支持RocksDB作为状态后端
-   - 实现增量Checkpoint
-
-3. **监控和告警**
-   - 集成Prometheus
-   - 提供Grafana Dashboard模板
-
-### 10.2 中期规划
-
-1. **分布式执行**
-   - 支持任务分布式部署
-   - 实现动态负载均衡
-
-2. **SQL支持**
-   - 提供SQL API
-   - 实现常用的SQL算子
-
-3. **可视化管理**
-   - Web UI管理界面
-   - 可视化Pipeline构建
-
-### 10.3 长期规划
-
-1. **流批一体**
-   - 统一流处理和批处理API
-   - 支持Lambda架构和Kappa架构
-
-2. **机器学习集成**
-   - 支持在线特征工程
-   - 集成常用ML框架
-
-3. **云原生**
-   - Kubernetes Operator
-   - 云原生存储集成
-
-## 11. 参考资料
-
-### 11.1 相关技术
-
-- [Project Reactor官方文档](https://projectreactor.io/docs)
-- [Apache Flink架构设计](https://flink.apache.org/)
-- [Reactive Streams规范](https://www.reactive-streams.org/)
-- [R2DBC规范](https://r2dbc.io/)
-
-### 11.2 设计模式
-
-- Pipeline模式
-- Chain of Responsibility模式
-- Strategy模式
-- Factory模式
-
-### 11.3 性能调优
-
-- [Reactor性能调优指南](https://projectreactor.io/docs/core/release/reference/#advanced)
-- [JVM性能调优](https://docs.oracle.com/javase/8/docs/technotes/guides/vm/gctuning/)
-
-## 12. 附录
-
-### 12.1 术语表
-
-| 术语 | 英文 | 说明 |
-| --- | --- | --- |
-| 数据源 | Source | 数据的来源，如数据库、消息队列等 |
-| 算子 | Operator | 对数据进行转换的操作 |
-| 输出 | Sink | 数据的目的地 |
-| 背压 | Backpressure | 下游处理速度慢于上游时的流量控制机制 |
-| 检查点 | Checkpoint | 状态快照，用于故障恢复 |
-| 水位线 | Watermark | 事件时间进度标记 |
-| 窗口 | Window | 将无界流切分为有界数据集 |
-
-### 12.2 配置参数说明
+### 6.1 系统配置
 
 ```yaml
-# Pipeline配置示例
-pipeline:
-  name: user-etl-job
-  parallelism: 4
+# 系统全局配置
+system:
+  name: reactive-etl-framework
+  version: 1.0.0
   
+  # 执行器配置
+  executor:
+    type: single-node  # single-node / distributed
+    parallelism: 4     # 默认并行度
+    threadPool:
+      coreSize: 10
+      maxSize: 50
+      queueCapacity: 1000
+      
+  # 调度器配置
+  scheduler:
+    type: quartz
+    threadPoolSize: 20
+    jobQueueSize: 1000
+    
   # 检查点配置
   checkpoint:
     enabled: true
     interval: 60s
     timeout: 10s
-    storage: filesystem
-    path: /data/checkpoints
-    
-  # 重启策略
-  restart:
-    strategy: fixed-delay
-    attempts: 3
-    delay: 10s
-    
-  # 背压配置
-  backpressure:
-    buffer-size: 1000
-    overflow-strategy: error
-    
+    storage:
+      type: filesystem
+      path: /data/checkpoints
+      
+  # 状态后端配置
+  state:
+    backend: memory  # memory / rocksdb
+    rocksdb:
+      path: /data/state
+      blockCacheSize: 256m
+      
   # 监控配置
   metrics:
     enabled: true
@@ -1660,25 +921,581 @@ pipeline:
         interval: 60s
 ```
 
-### 12.3 常见问题FAQ
+### 6.2 任务配置
 
-**Q1: 如何处理大状态？**
-A: 使用RocksDB作为状态后端，支持状态溢出到磁盘。
+```yaml
+# ETL任务配置示例
+job:
+  id: user-etl-job
+  name: User Data ETL
+  type: streaming
+  
+  # 调度配置
+  schedule:
+    policy: cron
+    expression: "0 0 * * * ?"
+    timezone: Asia/Shanghai
+    
+  # 资源配置
+  resources:
+    parallelism: 8
+    memory: 4g
+    
+  # Source配置
+  source:
+    connector: kafka
+    type: kafka
+    config:
+      bootstrapServers: localhost:9092
+      topics: [user-events]
+      groupId: etl-consumer
+      
+  # Operator配置
+  operators:
+    - name: parse
+      type: map
+      parallelism: 8
+      
+    - name: filter
+      type: filter
+      parallelism: 8
+      
+    - name: aggregate
+      type: window-aggregate
+      parallelism: 4
+      window:
+        type: tumbling
+        size: 5m
+        
+  # Sink配置
+  sink:
+    connector: jdbc
+    type: jdbc
+    config:
+      url: jdbc:mysql://localhost:3306/warehouse
+      table: user_stats
+      batchSize: 100
+      flushInterval: 5s
+```
 
-**Q2: 如何保证Exactly-Once语义？**
-A: 结合Checkpoint和两阶段提交协议实现。
+## 7. 监控与运维
 
-**Q3: 如何进行性能调优？**
-A: 调整并行度、buffer大小、批处理大小等参数，使用profiling工具分析瓶颈。
+### 7.1 监控指标体系
 
-**Q4: 如何监控Pipeline运行状态？**
-A: 使用内置的Metrics系统，配合Prometheus和Grafana。
+```mermaid
+graph TB
+    Metrics[Metrics System]
+    
+    Metrics --> Job[Job Metrics]
+    Metrics --> Operator[Operator Metrics]
+    Metrics --> Resource[Resource Metrics]
+    
+    Job --> JM1[Jobs Running]
+    Job --> JM2[Jobs Success]
+    Job --> JM3[Jobs Failed]
+    Job --> JM4[Job Duration]
+    
+    Operator --> OM1[Records In]
+    Operator --> OM2[Records Out]
+    Operator --> OM3[Processing Time]
+    Operator --> OM4[Backpressure]
+    
+    Resource --> RM1[CPU Usage]
+    Resource --> RM2[Memory Usage]
+    Resource --> RM3[Thread Pool]
+    Resource --> RM4[Network IO]
+```
 
-**Q5: 如何处理数据倾斜？**
-A: 使用自定义分区策略，增加热点key的并行度。
+### 7.2 关键监控指标
+
+| 指标类别 | 指标名称 | 说明 |
+| --- | --- | --- |
+| 任务指标 | job.running | 运行中的任务数 |
+| 任务指标 | job.completed | 已完成的任务数 |
+| 任务指标 | job.failed | 失败的任务数 |
+| 任务指标 | job.duration | 任务执行时长 |
+| 算子指标 | operator.records.in | 算子输入记录数 |
+| 算子指标 | operator.records.out | 算子输出记录数 |
+| 算子指标 | operator.processing.time | 处理时间 |
+| 算子指标 | operator.backpressure | 背压事件 |
+| 资源指标 | system.cpu.usage | CPU使用率 |
+| 资源指标 | system.memory.usage | 内存使用率 |
+| 资源指标 | threadpool.active | 活跃线程数 |
+| 资源指标 | threadpool.queue.size | 队列大小 |
+
+### 7.3 健康检查机制
+
+```mermaid
+flowchart TD
+    HC[Health Check] --> JS[Job Scheduler Status]
+    HC --> JE[Job Executor Status]
+    HC --> CN[Connectors Status]
+    
+    JS --> JS1{Scheduler Running?}
+    JS1 -->|Yes| JS2[Check Job Queue]
+    JS1 -->|No| FAIL1[Health: DOWN]
+    JS2 --> JS3{Queue Size Normal?}
+    JS3 -->|Yes| OK1[Health: UP]
+    JS3 -->|No| WARN1[Health: DEGRADED]
+    
+    JE --> JE1{Jobs Running?}
+    JE1 -->|Yes| JE2[Check Backpressure]
+    JE1 -->|No| OK2[Health: UP]
+    JE2 --> JE3{Backpressure High?}
+    JE3 -->|No| OK3[Health: UP]
+    JE3 -->|Yes| WARN2[Health: DEGRADED]
+    
+    CN --> CN1{All Connectors Connected?}
+    CN1 -->|Yes| OK4[Health: UP]
+    CN1 -->|No| FAIL2[Health: DOWN]
+```
+
+### 7.4 日志规范
+
+**日志级别使用规范**
+- **TRACE**: 详细的执行追踪信息（生产环境关闭）
+- **DEBUG**: 调试信息，帮助定位问题
+- **INFO**: 关键业务事件（任务启动、完成、检查点等）
+- **WARN**: 警告信息（重试、降级等）
+- **ERROR**: 错误信息（任务失败、异常等）
+
+**结构化日志示例**
+```json
+{
+  "timestamp": "2025-11-09T10:30:00.000Z",
+  "level": "INFO",
+  "logger": "JobExecutor",
+  "jobId": "job-123",
+  "jobName": "user-etl",
+  "event": "JOB_STARTED",
+  "message": "Job started successfully",
+  "metadata": {
+    "parallelism": 8,
+    "operators": 5
+  }
+}
+```
+
+## 8. 扩展性设计
+
+### 8.1 自定义Connector开发
+
+**步骤1：实现Connector接口**
+```java
+public class CustomConnector implements Connector {
+    @Override
+    public String getType() {
+        return "custom";
+    }
+    
+    @Override
+    public <T> DataSource<T> createSource(SourceConfig config) {
+        return new CustomSource<>(config);
+    }
+    
+    @Override
+    public <T> DataSink<T> createSink(SinkConfig config) {
+        return new CustomSink<>(config);
+    }
+}
+```
+
+**步骤2：实现Source和Sink**
+```java
+public class CustomSource<T> implements DataSource<T> {
+    @Override
+    public Flux<T> getDataStream() {
+        // 实现数据读取逻辑
+    }
+}
+
+public class CustomSink<T> implements DataSink<T> {
+    @Override
+    public Mono<Void> write(Flux<T> dataStream) {
+        // 实现数据写入逻辑
+    }
+}
+```
+
+**步骤3：注册Connector**
+在`META-INF/services/com.framework.etl.Connector`文件中添加：
+```
+com.example.CustomConnector
+```
+
+### 8.2 自定义Operator开发
+
+```java
+public class CustomOperator<IN, OUT> implements Operator<IN, OUT> {
+    
+    @Override
+    public Flux<OUT> apply(Flux<IN> input) {
+        return input
+            .map(this::transform)
+            .filter(this::shouldKeep);
+    }
+    
+    @Override
+    public boolean isStateful() {
+        return false;
+    }
+    
+    private OUT transform(IN input) {
+        // 转换逻辑
+    }
+    
+    private boolean shouldKeep(OUT output) {
+        // 过滤逻辑
+    }
+}
+```
+
+### 8.3 自定义调度策略
+
+```java
+public class CustomSchedulePolicy implements SchedulePolicy {
+    
+    @Override
+    public Flux<Trigger> getTriggers() {
+        // 返回触发信号流
+        return Flux.interval(Duration.ofMinutes(30))
+            .map(tick -> new Trigger(triggerTime));
+    }
+    
+    @Override
+    public boolean shouldExecute(Job job) {
+        // 判断是否应该执行
+        return checkConditions(job);
+    }
+}
+```
+
+## 9. 使用示例
+
+### 9.1 快速开始：简单ETL任务
+
+```java
+// 创建Job
+Job job = Job.builder()
+    .name("simple-etl")
+    .source(Connectors.kafka()
+        .topic("user-events")
+        .groupId("etl-consumer")
+        .build())
+    .transform(Operators.map(event -> parseUser(event)))
+    .transform(Operators.filter(user -> user.isActive()))
+    .sink(Connectors.jdbc()
+        .table("users")
+        .batchSize(100)
+        .build())
+    .build();
+
+// 提交任务
+jobScheduler.schedule(job, SchedulePolicy.immediate());
+```
+
+### 9.2 定时调度任务
+
+```java
+Job job = Job.builder()
+    .name("daily-report")
+    .source(Connectors.jdbc()
+        .query("SELECT * FROM orders WHERE date = ?")
+        .build())
+    .transform(Operators.aggregate(
+        Orders::getRegion,
+        Orders::getAmount,
+        Double::sum
+    ))
+    .sink(Connectors.file()
+        .path("/reports/daily-{date}.csv")
+        .build())
+    .build();
+
+// 每天凌晨1点执行
+jobScheduler.schedule(job, SchedulePolicy.cron("0 0 1 * * ?"));
+```
+
+### 9.3 复杂的流处理任务
+
+```java
+StreamGraph graph = StreamGraph.builder()
+    // Source
+    .addSource("kafka-source", Connectors.kafka()
+        .topics("events")
+        .build())
+    
+    // Parse
+    .addOperator("parse", Operators.map(msg -> parseEvent(msg)))
+    
+    // Branch 1: User events
+    .addOperator("filter-user", Operators.filter(e -> e.isUserEvent()))
+    .addOperator("user-aggregate", Operators.windowAggregate(
+        Duration.ofMinutes(5),
+        Events::getUserId,
+        Collectors.counting()
+    ))
+    .addSink("user-sink", Connectors.jdbc().table("user_stats").build())
+    
+    // Branch 2: Order events
+    .addOperator("filter-order", Operators.filter(e -> e.isOrderEvent()))
+    .addOperator("order-aggregate", Operators.windowAggregate(
+        Duration.ofMinutes(5),
+        Events::getOrderId,
+        Collectors.summingDouble(Events::getAmount)
+    ))
+    .addSink("order-sink", Connectors.jdbc().table("order_stats").build())
+    
+    // Connect edges
+    .connect("kafka-source", "parse")
+    .connect("parse", "filter-user")
+    .connect("parse", "filter-order")
+    .connect("filter-user", "user-aggregate")
+    .connect("user-aggregate", "user-sink")
+    .connect("filter-order", "order-aggregate")
+    .connect("order-aggregate", "order-sink")
+    
+    .build();
+
+// 转换为JobGraph并提交
+JobGraph jobGraph = graph.toJobGraph();
+Job job = new Job(jobGraph);
+jobScheduler.schedule(job, SchedulePolicy.immediate());
+```
+
+## 10. 性能优化指南
+
+### 10.1 并行度配置
+
+```mermaid
+graph LR
+    subgraph "Low Parallelism"
+        T1[Task 1] --> R1[Result]
+    end
+    
+    subgraph "High Parallelism"
+        T2[Task 1] --> R2[Result]
+        T3[Task 2] --> R2
+        T4[Task 3] --> R2
+        T5[Task 4] --> R2
+    end
+```
+
+**配置建议**
+- CPU密集型：并行度 = CPU核心数
+- IO密集型：并行度 = 2 * CPU核心数
+- 根据数据量动态调整
+
+### 10.2 批处理优化
+
+```yaml
+sink:
+  batchSize: 100        # 批次大小
+  flushInterval: 5s     # 刷新间隔
+```
+
+**权衡考虑**
+- 批次越大，吞吐量越高，但延迟增加
+- 批次越小，延迟越低，但吞吐量降低
+
+### 10.3 背压控制策略
+
+| 策略 | 说明 | 适用场景 |
+| --- | --- | --- |
+| BUFFER | 缓冲数据 | 临时性的速度不匹配 |
+| DROP | 丢弃新数据 | 允许丢失部分数据 |
+| LATEST | 保留最新数据 | 只关心最新状态 |
+| ERROR | 抛出异常 | 不允许数据丢失 |
+
+### 10.4 资源配置建议
+
+```yaml
+resources:
+  # JVM配置
+  jvm:
+    heap: 4g
+    metaspace: 512m
+    gc: G1GC
+    
+  # 线程池配置
+  threadPool:
+    io:
+      coreSize: 20
+      maxSize: 100
+    compute:
+      coreSize: 8
+      maxSize: 16
+      
+  # 缓冲区配置
+  buffer:
+    sourceBuffer: 1000
+    sinkBuffer: 500
+```
+
+## 11. 容错与恢复
+
+### 11.1 故障类型
+
+```mermaid
+graph TB
+    Failures[Failure Types]
+    
+    Failures --> TF[Task Failures<br/>任务失败]
+    Failures --> NF[Node Failures<br/>节点故障]
+    Failures --> EF[External Failures<br/>外部系统故障]
+    
+    TF --> TF1[Data Error<br/>数据错误]
+    TF --> TF2[Logic Error<br/>逻辑错误]
+    
+    NF --> NF1[Process Crash<br/>进程崩溃]
+    NF --> NF2[Network Partition<br/>网络分区]
+    
+    EF --> EF1[Source Unavailable<br/>数据源不可用]
+    EF --> EF2[Sink Unavailable<br/>目标系统不可用]
+```
+
+### 11.2 重启策略
+
+```yaml
+restart:
+  # 固定延迟重启
+  strategy: fixed-delay
+  attempts: 3
+  delay: 10s
+  
+  # 指数退避重启
+  # strategy: exponential-backoff
+  # initialDelay: 1s
+  # maxDelay: 5m
+  # multiplier: 2
+  
+  # 失败率重启
+  # strategy: failure-rate
+  # maxFailuresPerInterval: 3
+  # failureRateInterval: 5m
+  # delay: 10s
+```
+
+### 11.3 检查点恢复流程
+
+```mermaid
+sequenceDiagram
+    participant Job
+    participant Scheduler
+    participant Executor
+    participant Checkpoint
+    participant State
+    
+    Note over Job: Job Failed
+    
+    Job->>Scheduler: report failure
+    Scheduler->>Scheduler: apply restart strategy
+    
+    alt Should Restart
+        Scheduler->>Checkpoint: get latest checkpoint
+        Checkpoint-->>Scheduler: checkpoint-id
+        
+        Scheduler->>Executor: restart(job, checkpoint-id)
+        Executor->>Checkpoint: load(checkpoint-id)
+        Checkpoint->>State: restore state
+        State-->>Executor: state restored
+        
+        Executor->>Executor: resume from checkpoint
+        Executor-->>Scheduler: job restarted
+    else Max Retries Exceeded
+        Scheduler->>Scheduler: mark job as failed
+        Scheduler-->>Job: job terminated
+    end
+```
+
+## 12. 最佳实践
+
+### 12.1 任务设计原则
+
+1. **单一职责**：每个Job只负责一个业务逻辑
+2. **幂等性**：确保任务可以安全重试
+3. **可观测性**：添加足够的监控指标和日志
+4. **容错性**：合理配置重试和检查点策略
+
+### 12.2 性能优化建议
+
+1. **合理设置并行度**：根据资源和数据量调整
+2. **启用算子链**：减少序列化开销
+3. **批量处理**：使用批量写入提高吞吐量
+4. **状态管理**：大状态使用RocksDB后端
+
+### 12.3 运维建议
+
+1. **监控告警**：设置关键指标告警阈值
+2. **定期备份**：定期备份检查点数据
+3. **资源隔离**：不同优先级任务使用不同资源池
+4. **灰度发布**：新版本先小流量验证
+
+## 13. 未来规划
+
+### 13.1 短期规划（3-6个月）
+
+- 完善Connector生态（MongoDB、ClickHouse、HBase）
+- 实现分布式执行模式
+- 提供Web管理界面
+- 支持SQL API
+
+### 13.2 中期规划（6-12个月）
+
+- 实现Exactly-Once语义
+- 支持动态扩缩容
+- 机器学习特征工程集成
+- 流批一体架构
+
+### 13.3 长期规划（1-2年）
+
+- 云原生支持（Kubernetes Operator）
+- 多租户隔离
+- 实时数据质量监控
+- 智能资源调度
+
+## 14. 参考资料
+
+### 14.1 技术栈
+
+- **响应式编程**: Project Reactor 3.5+
+- **任务调度**: Quartz Scheduler
+- **状态存储**: RocksDB
+- **监控**: Micrometer + Prometheus
+- **序列化**: Protobuf / Avro
+
+### 14.2 设计参考
+
+- Apache Flink架构设计
+- Apache Kafka Streams
+- Spring Cloud Data Flow
+- Reactive Streams规范
+
+### 14.3 相关文档
+
+- [Project Reactor官方文档](https://projectreactor.io/docs)
+- [Reactive Streams规范](https://www.reactive-streams.org/)
+- [Apache Flink文档](https://flink.apache.org/)
+
+## 15. 术语表
+
+| 术语 | 英文 | 说明 |
+| --- | --- | --- |
+| 任务 | Job | 完整的ETL处理流程 |
+| 流图 | StreamGraph | 用户定义的逻辑执行图 |
+| 任务图 | JobGraph | 优化后的物理执行图 |
+| 调度器 | Scheduler | 任务调度组件 |
+| 执行器 | Executor | 任务执行引擎 |
+| 数据源 | Source | 数据输入 |
+| 算子 | Operator | 数据转换 |
+| 输出 | Sink | 数据输出 |
+| 连接器 | Connector | 外部系统连接 |
+| 背压 | Backpressure | 流量控制机制 |
+| 检查点 | Checkpoint | 状态快照 |
+| 算子链 | Operator Chain | 算子优化合并 |
 
 ---
 
-**文档版本**: v1.0  
+**文档版本**: v2.0  
 **最后更新**: 2025-11-09  
 **维护者**: ETL Framework Team
