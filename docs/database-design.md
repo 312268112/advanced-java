@@ -1,423 +1,481 @@
-# 响应式ETL框架 - 数据库设计文档
+# 响应式ETL框架 - 数据库设计文档（单机版）
 
 ## 1. 概述
 
-本文档描述了响应式ETL框架的数据库表结构设计，涵盖任务管理、图结构、连接器配置、检查点、监控指标、系统配置等核心功能模块。
+本文档描述了响应式ETL框架的数据库表结构设计。该框架采用**单机执行模式**，即一个Job作为最小执行单元，在单个实例上完整运行，不涉及分布式算子调度。
 
-### 1.1 数据库选型
+### 1.1 设计原则
 
-- **主数据库**: MySQL 8.0+
+- **单机执行**: 每个Job在一个实例上完整执行，不会将算子分散到不同节点
+- **简洁高效**: 去除分布式相关的复杂设计，保持表结构简洁
+- **易于管理**: 降低运维复杂度，适合中小规模数据处理
+- **完整功能**: 支持任务调度、检查点、监控告警等核心功能
+
+### 1.2 数据库选型
+
+- **数据库**: MySQL 8.0+
 - **字符集**: utf8mb4
 - **存储引擎**: InnoDB
+- **时区**: 统一使用UTC或Asia/Shanghai
 
-### 1.2 表分类
+### 1.3 表分类概览
 
 ```mermaid
 graph TB
-    DB[ETL Database]
+    DB[ETL Database<br/>单机版]
     
-    DB --> JOB[任务管理]
-    DB --> GRAPH[图结构]
-    DB --> CONN[连接器]
-    DB --> CP[检查点]
-    DB --> METRICS[监控指标]
-    DB --> SYS[系统配置]
-    DB --> USER[用户权限]
+    DB --> JOB[任务管理<br/>3张表]
+    DB --> GRAPH[图结构<br/>1张表]
+    DB --> CONN[连接器<br/>2张表]
+    DB --> CP[检查点<br/>1张表]
+    DB --> METRICS[监控指标<br/>1张表]
+    DB --> SYS[系统配置<br/>3张表]
+    DB --> USER[用户审计<br/>2张表]
     
-    JOB --> J1[etl_job]
-    JOB --> J2[etl_job_execution]
-    JOB --> J3[etl_job_schedule]
+    JOB --> J1[etl_job<br/>任务定义]
+    JOB --> J2[etl_job_instance<br/>运行实例]
+    JOB --> J3[etl_job_schedule<br/>调度配置]
     
-    GRAPH --> G1[etl_stream_graph]
-    GRAPH --> G2[etl_job_graph]
-    GRAPH --> G3[etl_graph_node]
-    GRAPH --> G4[etl_graph_edge]
+    GRAPH --> G1[etl_stream_graph<br/>流图定义]
     
-    CONN --> C1[etl_connector]
-    CONN --> C2[etl_connector_config]
+    CONN --> C1[etl_connector<br/>连接器注册]
+    CONN --> C2[etl_datasource<br/>数据源配置]
     
-    CP --> CP1[etl_checkpoint]
-    CP --> CP2[etl_operator_state]
+    CP --> CP1[etl_checkpoint<br/>检查点]
     
-    METRICS --> M1[etl_job_metrics]
-    METRICS --> M2[etl_operator_metrics]
+    METRICS --> M1[etl_job_metrics<br/>运行指标]
     
-    SYS --> S1[etl_system_config]
-    SYS --> S2[etl_alert_rule]
-    SYS --> S3[etl_alert_history]
+    SYS --> S1[etl_system_config<br/>系统配置]
+    SYS --> S2[etl_alert_rule<br/>告警规则]
+    SYS --> S3[etl_alert_record<br/>告警记录]
     
-    USER --> U1[etl_user]
-    USER --> U2[etl_operation_log]
+    USER --> U1[etl_user<br/>用户]
+    USER --> U2[etl_operation_log<br/>操作日志]
 ```
 
 ## 2. 任务管理相关表
 
 ### 2.1 etl_job - 任务定义表
 
-**用途**: 存储ETL任务的基本信息和配置
+**用途**: 存储ETL任务的定义信息和配置
+
+**核心设计**:
+- 一个Job包含完整的Source → Operators → Sink处理链
+- 使用JSON字段存储Source、Operators、Sink配置，灵活且易于扩展
+- 不需要并行度、分区等分布式概念
 
 **关键字段说明**:
-- `job_id`: 任务唯一标识，建议使用UUID
-- `job_type`: STREAMING(流式任务) / BATCH(批处理任务)
-- `job_status`: 任务状态流转
-  - CREATED → SCHEDULED → RUNNING → COMPLETED/FAILED/CANCELLED
-- `job_graph_id`: 关联的JobGraph ID
-- `config`: JSON格式存储任务配置，包括Source、Operator、Sink配置
-- `restart_strategy`: 重启策略（FIXED_DELAY/EXPONENTIAL_BACKOFF/FAILURE_RATE）
 
-**设计考虑**:
-- 使用软删除（is_deleted）保留历史任务
-- JSON字段存储灵活配置，支持动态扩展
-- 索引优化：job_id、job_status、create_time
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| job_id | VARCHAR(64) | 任务唯一标识，建议UUID |
+| job_type | VARCHAR(32) | STREAMING(流式)/BATCH(批处理) |
+| job_status | VARCHAR(32) | CREATED/SCHEDULED/RUNNING/PAUSED/COMPLETED/FAILED/CANCELLED |
+| stream_graph_id | VARCHAR(64) | 关联的StreamGraph ID |
+| source_config | JSON | Source配置，包含连接器类型、数据源ID、读取参数等 |
+| operators_config | JSON | Operators配置数组，按顺序执行 |
+| sink_config | JSON | Sink配置，包含连接器类型、目标数据源、写入参数等 |
+| restart_strategy | VARCHAR(32) | 重启策略: FIXED_DELAY/EXPONENTIAL_BACKOFF/NO_RESTART |
+| checkpoint_enabled | TINYINT | 是否启用检查点 |
 
-### 2.2 etl_job_execution - 任务执行历史表
+**配置示例**:
 
-**用途**: 记录每次任务执行的详细信息和指标
+```json
+{
+  "source_config": {
+    "connector_type": "kafka",
+    "datasource_id": "kafka-prod",
+    "topics": ["user-events"],
+    "group_id": "etl-consumer",
+    "poll_timeout_ms": 1000
+  },
+  "operators_config": [
+    {
+      "operator_type": "MAP",
+      "name": "parse-json",
+      "function": "com.example.ParseJsonFunction"
+    },
+    {
+      "operator_type": "FILTER",
+      "name": "filter-active",
+      "predicate": "user.isActive == true"
+    },
+    {
+      "operator_type": "AGGREGATE",
+      "name": "count-by-city",
+      "window_size": "5m",
+      "group_by": "city"
+    }
+  ],
+  "sink_config": {
+    "connector_type": "jdbc",
+    "datasource_id": "mysql-warehouse",
+    "table": "user_stats",
+    "batch_size": 100,
+    "flush_interval_ms": 5000
+  }
+}
+```
+
+### 2.2 etl_job_instance - 任务实例表
+
+**用途**: 记录每次Job运行的实例信息
+
+**核心设计**:
+- 一个Job可以有多次运行实例
+- 记录运行主机、进程ID等信息，便于定位问题
+- 记录核心指标：读取、处理、写入记录数
 
 **关键字段说明**:
-- `execution_id`: 每次执行的唯一标识
-- `execution_status`: 执行状态
-- `records_*`: 各类记录数统计（读取、处理、写入、过滤、失败）
-- `duration_ms`: 执行耗时
-- `last_checkpoint_id`: 最后一次成功的检查点ID，用于故障恢复
-- `metrics`: JSON格式存储详细指标
 
-**设计考虑**:
-- 用于任务执行历史追溯和问题排查
-- 支持按时间范围查询执行记录
-- 大数据量场景建议按时间分区
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| instance_id | VARCHAR(64) | 实例唯一标识 |
+| job_id | VARCHAR(64) | 所属任务ID |
+| instance_status | VARCHAR(32) | RUNNING/COMPLETED/FAILED/CANCELLED |
+| host_address | VARCHAR(128) | 运行主机地址，如 192.168.1.100 |
+| process_id | VARCHAR(64) | 进程PID |
+| start_time | DATETIME | 开始时间 |
+| end_time | DATETIME | 结束时间 |
+| duration_ms | BIGINT | 执行时长(毫秒) |
+| records_read | BIGINT | 读取记录数 |
+| records_processed | BIGINT | 处理记录数 |
+| records_written | BIGINT | 写入记录数 |
+| last_checkpoint_id | VARCHAR(64) | 最后检查点ID，用于故障恢复 |
+
+**使用场景**:
+- 任务执行历史查询
+- 故障排查和问题定位
+- 性能分析和统计报表
 
 ### 2.3 etl_job_schedule - 任务调度配置表
 
-**用途**: 管理任务的调度策略和触发规则
+**用途**: 管理任务的调度策略
+
+**核心设计**:
+- 支持立即执行、定时执行、手动执行三种模式
+- 一个Job对应一个调度配置（1:1关系）
+- 简化了依赖调度和事件触发（可在应用层实现）
 
 **关键字段说明**:
-- `schedule_type`: 调度类型
-  - IMMEDIATE: 立即执行
-  - CRON: 定时调度
-  - DEPENDENCY: 依赖触发
-  - EVENT: 事件触发
-- `cron_expression`: Cron表达式，如 "0 0 * * * ?" 表示每小时执行
-- `dependency_job_ids`: 依赖的上游任务ID列表
-- `priority`: 任务优先级，数字越大优先级越高
-- `max_concurrent_runs`: 最大并发执行数，防止任务堆积
 
-**设计考虑**:
-- 支持多种调度策略，满足不同场景需求
-- next_fire_time索引优化调度器查询性能
-- 记录触发历史（fire_count）用于统计分析
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| schedule_type | VARCHAR(32) | IMMEDIATE(立即)/CRON(定时)/MANUAL(手动) |
+| cron_expression | VARCHAR(128) | Cron表达式，如 "0 0 * * * ?" |
+| next_fire_time | DATETIME | 下次触发时间 |
+| fire_count | BIGINT | 已触发次数 |
+
+**Cron表达式示例**:
+- `0 0 * * * ?` - 每小时执行
+- `0 0 1 * * ?` - 每天凌晨1点执行
+- `0 */5 * * * ?` - 每5分钟执行
 
 ## 3. 图结构相关表
 
-### 3.1 etl_stream_graph - StreamGraph逻辑图表
+### 3.1 etl_stream_graph - StreamGraph定义表
 
-**用途**: 存储用户定义的逻辑执行图
+**用途**: 存储任务的数据流图定义
 
-**关键字段说明**:
-- `graph_id`: 图的唯一标识
-- `graph_json`: 完整的图结构，包括所有节点和边的定义
-- `node_count` / `edge_count`: 节点和边的数量
-
-**设计考虑**:
-- StreamGraph是用户API直接生成的逻辑图
-- JSON存储完整图结构，便于可视化展示
-- 一个Job对应一个StreamGraph
-
-### 3.2 etl_job_graph - JobGraph物理图表
-
-**用途**: 存储优化后的物理执行图
+**核心设计**:
+- StreamGraph是逻辑执行图，描述Source → Operators → Sink的数据流向
+- 使用JSON完整存储图结构，包括节点和边
+- 单机模式下不需要JobGraph优化，直接使用StreamGraph执行
 
 **关键字段说明**:
-- `stream_graph_id`: 对应的StreamGraph ID
-- `vertex_count`: 顶点数量（经过算子链合并后）
-- `optimization_info`: 优化信息，记录哪些算子被链接
 
-**设计考虑**:
-- JobGraph是StreamGraph经过优化后的物理执行图
-- 包含算子链合并、资源分配等优化信息
-- 用于实际任务执行
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| graph_id | VARCHAR(64) | 图唯一标识 |
+| job_id | VARCHAR(64) | 关联的任务ID |
+| graph_definition | JSON | 完整的图定义 |
 
-### 3.3 etl_graph_node - 图节点表
+**图定义JSON结构**:
 
-**用途**: 存储图中的每个节点详细信息
+```json
+{
+  "nodes": [
+    {
+      "node_id": "source-1",
+      "node_type": "SOURCE",
+      "operator_type": "KAFKA_SOURCE",
+      "config": {...}
+    },
+    {
+      "node_id": "map-1",
+      "node_type": "OPERATOR",
+      "operator_type": "MAP",
+      "config": {...}
+    },
+    {
+      "node_id": "sink-1",
+      "node_type": "SINK",
+      "operator_type": "JDBC_SINK",
+      "config": {...}
+    }
+  ],
+  "edges": [
+    {
+      "source": "source-1",
+      "target": "map-1"
+    },
+    {
+      "source": "map-1",
+      "target": "sink-1"
+    }
+  ]
+}
+```
 
-**关键字段说明**:
-- `node_type`: SOURCE / OPERATOR / SINK
-- `operator_type`: 具体算子类型（MAP/FILTER/FLATMAP/AGGREGATE/WINDOW等）
-- `is_chained`: 是否已被链接到算子链
-- `chain_head_id`: 所属算子链的头节点ID
-- `chain_position`: 在算子链中的位置
-
-**设计考虑**:
-- 支持算子链优化
-- 每个节点可单独配置并行度
-- config字段存储节点特定配置
-
-### 3.4 etl_graph_edge - 图边表
-
-**用途**: 存储图中节点之间的连接关系
-
-**关键字段说明**:
-- `edge_type`: 数据传输类型
-  - FORWARD: 一对一转发
-  - SHUFFLE: 打乱重分区
-  - BROADCAST: 广播
-- `partition_strategy`: 分区策略（HASH/ROUND_ROBIN/CUSTOM）
-
-**设计考虑**:
-- 描述数据在节点间的流转方式
-- 影响数据分发和并行度
+**设计简化**:
+- 去除了并行度、分区策略等分布式概念
+- 不需要算子链优化（Operator Chain）
+- 不需要资源分配和调度
 
 ## 4. 连接器配置相关表
 
-### 4.1 etl_connector - 连接器定义表
+### 4.1 etl_connector - 连接器注册表
 
 **用途**: 注册系统支持的所有连接器
 
-**关键字段说明**:
-- `connector_type`: JDBC/KAFKA/HTTP/FILE/CUSTOM
-- `connector_class`: 连接器实现类的全限定名
-- `support_source` / `support_sink`: 标识该连接器支持的功能
-- `config_schema`: JSON Schema格式的配置描述
-- `is_builtin`: 区分内置连接器和自定义连接器
-
-**设计考虑**:
-- 支持SPI机制动态加载连接器
-- config_schema用于配置验证和UI生成
+**核心设计**:
 - 内置连接器随系统初始化
+- 支持自定义连接器通过SPI机制注册
+- 一个连接器可以同时支持Source和Sink
 
-### 4.2 etl_connector_config - 连接器配置实例表
+**内置连接器**:
 
-**用途**: 存储具体的连接器配置实例
+| 连接器类型 | 支持Source | 支持Sink | 说明 |
+| --- | --- | --- | --- |
+| JDBC | ✓ | ✓ | 关系型数据库 |
+| KAFKA | ✓ | ✓ | 消息队列 |
+| HTTP | ✓ | ✓ | REST API |
+| FILE | ✓ | ✓ | 文件系统 |
+| REDIS | ✓ | ✓ | 缓存 |
+| ELASTICSEARCH | ✓ | ✓ | 搜索引擎 |
 
-**关键字段说明**:
-- `usage_type`: SOURCE / SINK
-- `connection_config`: 连接配置（如数据库URL、Kafka地址等）
-- `extra_config`: 扩展配置（如批量大小、超时时间等）
+### 4.2 etl_datasource - 数据源配置表
 
-**设计考虑**:
-- 一个连接器可以有多个配置实例
-- 配置可以在多个任务间共享
-- 敏感信息（如密码）需要加密存储
+**用途**: 存储具体的数据源连接配置
+
+**核心设计**:
+- 一个连接器可以配置多个数据源实例
+- 数据源配置可以在多个Job间共享
+- 敏感信息（密码）需要加密存储
+
+**配置示例**:
+
+```json
+{
+  "connection_config": {
+    "url": "jdbc:mysql://localhost:3306/test",
+    "username": "root",
+    "password": "encrypted_password",
+    "driver": "com.mysql.cj.jdbc.Driver",
+    "pool": {
+      "maxSize": 20,
+      "maxIdleTime": "30m"
+    }
+  }
+}
+```
 
 ## 5. 检查点相关表
 
-### 5.1 etl_checkpoint - 检查点元数据表
+### 5.1 etl_checkpoint - 检查点表
 
-**用途**: 记录检查点的元数据和状态
+**用途**: 记录检查点信息，用于故障恢复
+
+**核心设计**:
+- 周期性自动创建检查点或手动触发
+- 小状态直接存储在数据库（state_snapshot字段）
+- 大状态存储在文件系统，数据库记录路径
 
 **关键字段说明**:
-- `checkpoint_type`: 
-  - PERIODIC: 周期性检查点
-  - SAVEPOINT: 手动保存点
-- `checkpoint_status`: IN_PROGRESS / COMPLETED / FAILED
-- `state_size_bytes`: 状态总大小
-- `checkpoint_path`: 存储路径（文件系统/HDFS/S3等）
 
-**设计考虑**:
-- 用于故障恢复
-- 记录检查点创建耗时，用于性能分析
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| checkpoint_id | VARCHAR(64) | 检查点唯一标识 |
+| instance_id | VARCHAR(64) | 所属实例ID |
+| checkpoint_type | VARCHAR(32) | AUTO(自动)/MANUAL(手动) |
+| state_size_bytes | BIGINT | 状态大小 |
+| storage_path | VARCHAR(512) | 大状态存储路径 |
+| state_snapshot | JSON | 小状态直接存储 |
+
+**使用场景**:
+- Job失败后从最近的检查点恢复
+- 手动保存点用于版本升级
+- 状态迁移和备份
+
+**保留策略**:
+- 默认保留最近5个检查点
 - 定期清理过期检查点
-
-### 5.2 etl_operator_state - 算子状态表
-
-**用途**: 记录每个算子的状态信息
-
-**关键字段说明**:
-- `state_type`: VALUE / LIST / MAP
-- `state_name`: 状态名称
-- `state_path`: 状态数据存储路径
-
-**设计考虑**:
-- 每个算子可以有多个命名状态
-- 支持不同类型的状态存储
-- 与checkpoint_id关联，用于恢复
 
 ## 6. 监控指标相关表
 
-### 6.1 etl_job_metrics - 任务指标表
+### 6.1 etl_job_metrics - 任务运行指标表
 
-**用途**: 记录任务级别的监控指标
+**用途**: 记录任务运行时的监控指标
 
-**关键字段说明**:
-- `records_*_total`: 累计指标
-- `records_*_rate`: 速率指标（记录/秒）
-- `backpressure_count`: 背压事件次数
-- `cpu_usage_percent` / `memory_usage_bytes`: 资源使用情况
-
-**设计考虑**:
-- 按固定时间间隔（如1分钟）采集指标
+**核心设计**:
+- 单机模式只需要Job级别指标，不需要算子级别指标
+- 定期采集（如每10秒）存储一条记录
 - 用于实时监控和历史趋势分析
-- 大数据量建议按月分区
 
-### 6.2 etl_operator_metrics - 算子指标表
+**关键指标**:
 
-**用途**: 记录算子级别的监控指标
+| 指标类别 | 字段 | 说明 |
+| --- | --- | --- |
+| 吞吐量 | records_read_rate | 读取速率(记录/秒) |
+| 吞吐量 | records_write_rate | 写入速率(记录/秒) |
+| 延迟 | processing_latency_ms | 处理延迟(毫秒) |
+| 错误 | error_count | 错误次数 |
+| 背压 | backpressure_count | 背压次数 |
+| 资源 | jvm_heap_used_mb | JVM堆内存使用 |
+| 资源 | cpu_usage_percent | CPU使用率 |
+| 资源 | thread_count | 线程数 |
 
-**关键字段说明**:
-- `records_in` / `records_out`: 输入输出记录数
-- `processing_time_ms`: 处理耗时
-- `backpressure_time_ms`: 背压时间
+**数据保留**:
+- 详细指标保留30天
+- 可以聚合后长期保存
 
-**设计考虑**:
-- 用于定位性能瓶颈
-- 可以识别慢算子
-- 支持算子级别的性能分析
-
-## 7. 系统配置相关表
+## 7. 系统配置和告警
 
 ### 7.1 etl_system_config - 系统配置表
 
 **用途**: 存储系统全局配置
 
-**关键字段说明**:
-- `config_type`: STRING / INT / BOOLEAN / JSON
-- `config_group`: 配置分组（executor/checkpoint/metrics等）
-- `is_encrypted`: 敏感配置需要加密
-- `is_readonly`: 只读配置不允许修改
+**配置分组**:
 
-**设计考虑**:
-- 支持动态配置更新
-- 配置变更记录在update_time
-- 按分组查询提高效率
+| 分组 | 配置项 | 说明 |
+| --- | --- | --- |
+| EXECUTOR | thread.pool.core.size | 线程池核心大小 |
+| EXECUTOR | thread.pool.max.size | 线程池最大大小 |
+| CHECKPOINT | checkpoint.interval.seconds | 检查点间隔 |
+| CHECKPOINT | checkpoint.retention.count | 保留检查点数量 |
+| METRICS | metrics.collect.interval.seconds | 指标采集间隔 |
 
 ### 7.2 etl_alert_rule - 告警规则表
 
 **用途**: 定义监控告警规则
 
-**关键字段说明**:
-- `rule_type`: 告警类型
-  - JOB_FAILED: 任务失败
-  - HIGH_LATENCY: 高延迟
-  - BACKPRESSURE: 背压
-  - CHECKPOINT_FAILED: 检查点失败
-- `condition_operator`: 条件运算符（> / < / = / >= / <=）
-- `threshold_value`: 告警阈值
-- `alert_level`: INFO / WARNING / ERROR / CRITICAL
+**支持的告警类型**:
 
-**设计考虑**:
-- 支持多种告警类型
-- 灵活的条件配置
-- 多种通知渠道（EMAIL/SMS/WEBHOOK）
+| 告警类型 | 说明 | 条件示例 |
+| --- | --- | --- |
+| JOB_FAILED | 任务失败 | instance_status == FAILED |
+| JOB_TIMEOUT | 任务超时 | duration_ms > 3600000 |
+| HIGH_ERROR_RATE | 高错误率 | error_count / records_read_total > 0.01 |
+| CHECKPOINT_FAILED | 检查点失败 | checkpoint_status == FAILED |
 
-### 7.3 etl_alert_history - 告警历史表
+**通知渠道**:
+- EMAIL: 邮件通知
+- SMS: 短信通知
+- WEBHOOK: Webhook回调
+- DINGTALK: 钉钉机器人
+
+### 7.3 etl_alert_record - 告警记录表
 
 **用途**: 记录触发的告警
 
-**关键字段说明**:
-- `current_value` / `threshold_value`: 当前值与阈值对比
-- `is_resolved`: 告警是否已解决
-- `notification_status`: 通知发送状态
-
-**设计考虑**:
+**核心功能**:
 - 告警历史追溯
-- 支持告警收敛和聚合
-- 定期归档历史告警
+- 告警状态管理（已解决/未解决）
+- 通知发送状态跟踪
 
-## 8. 用户和权限相关表
-
-### 8.1 etl_user - 用户表
-
-**用途**: 存储用户基本信息
-
-**关键字段说明**:
-- `role`: ADMIN / DEVELOPER / USER
-- `status`: ACTIVE / INACTIVE / LOCKED
-
-**设计考虑**:
-- 密码使用BCrypt等算法加密
-- 支持多种认证方式
-- 记录最后登录时间
-
-### 8.2 etl_operation_log - 操作日志表
-
-**用途**: 记录所有用户操作
-
-**关键字段说明**:
-- `operation_type`: 操作类型（CREATE_JOB/UPDATE_JOB/DELETE_JOB等）
-- `resource_type` / `resource_id`: 操作的资源
-- `request_params`: 请求参数
-- `operation_status`: 操作是否成功
-
-**设计考虑**:
-- 审计追踪
-- 问题排查
-- 安全合规
-
-## 9. 表关系ER图
+## 8. 表关系ER图
 
 ```mermaid
 erDiagram
-    etl_job ||--o{ etl_job_execution : "1:N"
-    etl_job ||--|| etl_job_schedule : "1:1"
-    etl_job ||--|| etl_stream_graph : "1:1"
-    etl_stream_graph ||--|| etl_job_graph : "1:1"
-    etl_stream_graph ||--o{ etl_graph_node : "1:N"
-    etl_stream_graph ||--o{ etl_graph_edge : "1:N"
-    etl_job_graph ||--o{ etl_graph_node : "1:N"
-    etl_job_graph ||--o{ etl_graph_edge : "1:N"
-    etl_job_execution ||--o{ etl_checkpoint : "1:N"
-    etl_checkpoint ||--o{ etl_operator_state : "1:N"
-    etl_job_execution ||--o{ etl_job_metrics : "1:N"
-    etl_job_execution ||--o{ etl_operator_metrics : "1:N"
-    etl_connector ||--o{ etl_connector_config : "1:N"
-    etl_alert_rule ||--o{ etl_alert_history : "1:N"
-    etl_user ||--o{ etl_operation_log : "1:N"
+    etl_job ||--o{ etl_job_instance : "1:N 一个任务多次运行"
+    etl_job ||--|| etl_job_schedule : "1:1 一个任务一个调度"
+    etl_job ||--|| etl_stream_graph : "1:1 一个任务一个图"
+    
+    etl_job_instance ||--o{ etl_checkpoint : "1:N 一次运行多个检查点"
+    etl_job_instance ||--o{ etl_job_metrics : "1:N 一次运行多条指标"
+    
+    etl_connector ||--o{ etl_datasource : "1:N 一个连接器多个数据源"
+    
+    etl_alert_rule ||--o{ etl_alert_record : "1:N 一个规则多条记录"
+    
+    etl_user ||--o{ etl_operation_log : "1:N 一个用户多条日志"
 ```
+
+## 9. 核心视图
+
+### 9.1 v_job_instance_stats - 任务实例统计视图
+
+**用途**: 快速查询任务的执行统计信息
+
+```sql
+SELECT * FROM v_job_instance_stats WHERE job_id = 'xxx';
+```
+
+**返回字段**:
+- total_runs: 总运行次数
+- success_runs: 成功次数
+- failed_runs: 失败次数
+- avg_duration_ms: 平均执行时长
+- last_run_time: 最后运行时间
+
+### 9.2 v_running_jobs - 当前运行任务视图
+
+**用途**: 查看当前正在运行的任务
+
+```sql
+SELECT * FROM v_running_jobs ORDER BY start_time DESC;
+```
+
+**返回字段**:
+- instance_id: 实例ID
+- job_name: 任务名称
+- running_seconds: 已运行秒数
+- records_read/processed/written: 实时统计
 
 ## 10. 索引策略
 
 ### 10.1 主键索引
-所有表都使用自增主键`id`，提供快速行定位。
+所有表使用自增主键`id`，提供快速行定位。
 
 ### 10.2 唯一索引
-- 业务唯一标识字段（如job_id、execution_id等）
-- 保证数据唯一性
+业务唯一标识字段：
+- job_id, instance_id, checkpoint_id等
+- 保证数据唯一性，避免重复
 
-### 10.3 普通索引
-- 高频查询字段（如job_status、create_time等）
-- 外键关联字段（如job_id、graph_id等）
+### 10.3 查询索引
 
-### 10.4 组合索引（根据实际查询优化）
+**高频查询字段**:
 ```sql
--- 任务执行历史查询
-ALTER TABLE etl_job_execution 
-ADD INDEX idx_job_status_time (job_id, execution_status, start_time);
+-- 任务状态查询
+KEY `idx_job_status` (`job_status`)
 
--- 指标时间范围查询
+-- 时间范围查询
+KEY `idx_start_time` (`start_time`)
+
+-- 关联查询
+KEY `idx_job_id` (`job_id`)
+```
+
+**组合索引**（根据实际查询优化）:
+```sql
+-- 任务实例查询
+ALTER TABLE etl_job_instance 
+ADD INDEX idx_job_status_time (job_id, instance_status, start_time);
+
+-- 指标查询
 ALTER TABLE etl_job_metrics 
-ADD INDEX idx_job_exec_time (job_id, execution_id, metric_time);
-
--- 检查点状态查询
-ALTER TABLE etl_checkpoint 
-ADD INDEX idx_job_status_trigger (job_id, checkpoint_status, trigger_time);
+ADD INDEX idx_instance_metric_time (instance_id, metric_time);
 ```
 
 ## 11. 分区策略
 
-对于数据量大的表，建议使用分区提高查询性能：
+对于数据量大的表，建议按时间分区：
 
-### 11.1 按时间分区（推荐）
+### 11.1 指标表分区
 
 ```sql
--- 任务指标表按月分区
-ALTER TABLE etl_job_metrics PARTITION BY RANGE (TO_DAYS(metric_time)) (
-    PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
-    PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01')),
-    PARTITION p202503 VALUES LESS THAN (TO_DAYS('2025-04-01')),
-    PARTITION p_future VALUES LESS THAN MAXVALUE
-);
-
--- 算子指标表按月分区
-ALTER TABLE etl_operator_metrics PARTITION BY RANGE (TO_DAYS(metric_time)) (
-    PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
-    PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01')),
-    PARTITION p202503 VALUES LESS THAN (TO_DAYS('2025-04-01')),
-    PARTITION p_future VALUES LESS THAN MAXVALUE
-);
-
--- 操作日志表按月分区
-ALTER TABLE etl_operation_log PARTITION BY RANGE (TO_DAYS(operation_time)) (
+ALTER TABLE etl_job_metrics 
+PARTITION BY RANGE (TO_DAYS(metric_time)) (
     PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
     PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01')),
     PARTITION p202503 VALUES LESS THAN (TO_DAYS('2025-04-01')),
@@ -425,141 +483,184 @@ ALTER TABLE etl_operation_log PARTITION BY RANGE (TO_DAYS(operation_time)) (
 );
 ```
 
-### 11.2 分区维护
+### 11.2 日志表分区
 
-定期添加新分区和删除旧分区：
+```sql
+ALTER TABLE etl_operation_log 
+PARTITION BY RANGE (TO_DAYS(operation_time)) (
+    PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
+    PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01')),
+    PARTITION p_future VALUES LESS THAN MAXVALUE
+);
+```
+
+### 11.3 分区维护
 
 ```sql
 -- 添加新分区
 ALTER TABLE etl_job_metrics 
 ADD PARTITION (PARTITION p202504 VALUES LESS THAN (TO_DAYS('2025-05-01')));
 
--- 删除旧分区（保留6个月数据）
+-- 删除旧分区（保留6个月）
 ALTER TABLE etl_job_metrics DROP PARTITION p202410;
 ```
 
 ## 12. 数据保留策略
 
-### 12.1 短期保留（7-30天）
-- etl_job_metrics: 详细指标，保留30天
-- etl_operator_metrics: 算子指标，保留30天
-
-### 12.2 中期保留（3-6个月）
-- etl_job_execution: 执行历史，保留6个月
-- etl_checkpoint: 检查点元数据，保留3个月
-- etl_alert_history: 告警历史，保留6个月
-
-### 12.3 长期保留
-- etl_job: 任务定义，软删除保留
-- etl_connector: 连接器定义，永久保留
-- etl_operation_log: 操作日志，保留1年
-
-### 12.4 归档策略
-
-```sql
--- 创建归档表
-CREATE TABLE etl_job_metrics_archive LIKE etl_job_metrics;
-
--- 归档旧数据
-INSERT INTO etl_job_metrics_archive 
-SELECT * FROM etl_job_metrics 
-WHERE metric_time < DATE_SUB(NOW(), INTERVAL 6 MONTH);
-
--- 删除已归档数据
-DELETE FROM etl_job_metrics 
-WHERE metric_time < DATE_SUB(NOW(), INTERVAL 6 MONTH);
-```
+| 表名 | 保留时长 | 清理策略 |
+| --- | --- | --- |
+| etl_job | 永久（软删除） | 定期归档已删除任务 |
+| etl_job_instance | 6个月 | 归档旧数据或删除 |
+| etl_checkpoint | 最近5个 | 自动清理旧检查点 |
+| etl_job_metrics | 30天 | 删除或聚合存储 |
+| etl_alert_record | 6个月 | 归档历史告警 |
+| etl_operation_log | 1年 | 归档审计日志 |
 
 ## 13. 性能优化建议
 
 ### 13.1 查询优化
 - 避免SELECT *，只查询需要的字段
-- 使用LIMIT限制返回结果集大小
-- 合理使用索引，避免全表扫描
+- 合理使用LIMIT限制结果集
+- 索引覆盖查询，避免回表
 - 大表JOIN使用索引字段
 
 ### 13.2 写入优化
 - 批量插入代替单条插入
 - 使用LOAD DATA INFILE导入大量数据
-- 适当调整innodb_buffer_pool_size
-- 监控慢查询日志
+- 异步写入指标和日志
+- 定期执行OPTIMIZE TABLE
 
-### 13.3 存储优化
-- JSON字段压缩存储
-- 大TEXT字段考虑分离存储
-- 定期OPTIMIZE TABLE整理碎片
-- 监控磁盘空间使用
+### 13.3 JSON字段使用
+- 不要在JSON字段上建索引
+- 避免在WHERE条件中使用JSON函数
+- 考虑将高频查询字段提取为独立列
+
+### 13.4 连接池配置
+```properties
+# HikariCP推荐配置
+maximumPoolSize=20
+minimumIdle=5
+connectionTimeout=30000
+idleTimeout=600000
+maxLifetime=1800000
+```
 
 ## 14. 安全考虑
 
 ### 14.1 敏感数据加密
-- 密码字段使用BCrypt加密
-- 连接配置中的密码加密存储
-- 使用AES加密敏感配置
+```java
+// 密码加密示例
+String encrypted = AESUtil.encrypt(password, secretKey);
 
-### 14.2 访问控制
-- 最小权限原则
-- 应用层使用专用数据库账号
-- 限制远程访问
-- 启用审计日志
-
-### 14.3 备份恢复
-- 每日全量备份
-- 实时binlog备份
-- 定期恢复演练
-- 备份数据加密存储
-
-## 15. 初始化脚本使用说明
-
-### 15.1 创建数据库
-
-```sql
-CREATE DATABASE etl_framework DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE etl_framework;
+// BCrypt密码哈希
+String hashed = BCrypt.hashpw(password, BCrypt.gensalt());
 ```
 
-### 15.2 执行建表脚本
+### 14.2 SQL注入防护
+- 使用PreparedStatement
+- 参数化查询
+- 输入验证和过滤
+
+### 14.3 访问控制
+- 应用层使用专用数据库账号
+- 最小权限原则
+- 定期审计数据库访问日志
+
+## 15. 备份恢复
+
+### 15.1 备份策略
+
+**全量备份（每日）**:
+```bash
+mysqldump -u root -p --single-transaction \
+  --master-data=2 \
+  etl_framework > backup_$(date +%Y%m%d).sql
+```
+
+**增量备份（实时）**:
+```bash
+# 开启binlog
+[mysqld]
+log-bin=mysql-bin
+binlog_format=ROW
+expire_logs_days=7
+```
+
+### 15.2 恢复演练
+
+**恢复全量备份**:
+```bash
+mysql -u root -p etl_framework < backup_20250109.sql
+```
+
+**恢复到指定时间点**:
+```bash
+mysqlbinlog --start-datetime="2025-01-09 10:00:00" \
+  --stop-datetime="2025-01-09 11:00:00" \
+  mysql-bin.000001 | mysql -u root -p etl_framework
+```
+
+## 16. 初始化步骤
+
+### 步骤1: 创建数据库
+
+```sql
+CREATE DATABASE etl_framework 
+DEFAULT CHARACTER SET utf8mb4 
+COLLATE utf8mb4_unicode_ci;
+```
+
+### 步骤2: 执行建表脚本
 
 ```bash
-mysql -u root -p etl_framework < database-schema.sql
+mysql -u root -p etl_framework < docs/database-schema.sql
 ```
 
-### 15.3 验证表创建
+### 步骤3: 验证初始化
 
 ```sql
--- 查看所有表
-SHOW TABLES;
+-- 查看表数量（应该是13张表）
+SELECT COUNT(*) FROM information_schema.tables 
+WHERE table_schema = 'etl_framework';
 
--- 查看表结构
-DESC etl_job;
+-- 查看内置连接器
+SELECT connector_id, connector_name, connector_type 
+FROM etl_connector WHERE is_builtin = 1;
 
--- 查看初始化数据
-SELECT * FROM etl_connector;
-SELECT * FROM etl_system_config;
+-- 查看系统配置
+SELECT config_key, config_value, config_group 
+FROM etl_system_config;
 ```
 
-## 16. 常见问题
+## 17. 常见问题
 
-### Q1: 为什么使用JSON字段存储配置？
-**A**: JSON提供灵活性，支持动态配置扩展，避免频繁修改表结构。但需要注意JSON字段不能建索引，复杂查询性能较差。
+### Q1: 为什么不使用分布式架构？
+**A**: 单机架构更简单，适合中小规模数据处理。降低了系统复杂度，更容易运维和调试。对于大规模数据处理，可以通过水平扩展多个独立实例实现。
 
-### Q2: 如何处理大数据量指标表？
-**A**: 
-1. 使用分区按月或按周分割数据
-2. 定期归档历史数据
-3. 考虑使用时序数据库（InfluxDB、Prometheus）
+### Q2: 如何实现Job的水平扩展？
+**A**: 可以部署多个ETL实例，每个实例运行不同的Job。通过调度器分配Job到不同实例，实现简单的负载均衡。
 
 ### Q3: 检查点数据存储在哪里？
-**A**: 检查点元数据存储在数据库，实际状态数据存储在文件系统（本地/HDFS/S3），通过checkpoint_path引用。
-
-### Q4: 如何保证分布式环境下的数据一致性？
 **A**: 
-1. 使用数据库事务
-2. 乐观锁（version字段）
-3. 分布式锁（Redis/Zookeeper）
+- 小状态（<1MB）: 直接存储在数据库的state_snapshot字段
+- 大状态（>1MB）: 存储在文件系统，数据库记录路径
+
+### Q4: 如何处理Job失败？
+**A**: 
+1. 根据restart_strategy自动重启
+2. 从最后一个成功的checkpoint恢复
+3. 触发告警通知相关人员
+4. 记录详细的错误信息和堆栈
+
+### Q5: 表结构如何升级？
+**A**: 
+1. 使用版本控制管理SQL脚本
+2. 使用Flyway或Liquibase进行数据库迁移
+3. 保持向后兼容，使用ALTER TABLE而非DROP TABLE
+4. 在测试环境充分验证后再上生产
 
 ---
 
-**文档版本**: v1.0  
+**文档版本**: v2.0（单机版）  
 **最后更新**: 2025-11-09  
 **维护者**: ETL Framework Team
