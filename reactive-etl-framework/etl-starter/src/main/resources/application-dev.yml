@@ -1,0 +1,45 @@
+spring:
+  r2dbc:
+    url: r2dbc:mysql://localhost:3306/etl_framework?useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: password
+    pool:
+      initial-size: 5
+      max-size: 20
+      max-idle-time: 30m
+
+# ETL Framework Configuration
+etl:
+  framework:
+    # Executor Configuration
+    executor:
+      thread-pool:
+        core-size: 10
+        max-size: 50
+        queue-capacity: 1000
+    
+    # Checkpoint Configuration
+    checkpoint:
+      enabled: true
+      interval-seconds: 60
+      storage:
+        type: filesystem
+        path: /data/checkpoints
+      retention:
+        count: 5
+    
+    # Metrics Configuration
+    metrics:
+      enabled: true
+      collect-interval-seconds: 10
+    
+    # Scheduler Configuration
+    scheduler:
+      enabled: true
+      thread-pool-size: 20
+
+logging:
+  level:
+    com.etl.framework: DEBUG
+    reactor.netty: DEBUG
+    io.r2dbc: DEBUG
