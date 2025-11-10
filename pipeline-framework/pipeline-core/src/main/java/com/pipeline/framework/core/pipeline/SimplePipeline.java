@@ -1,5 +1,6 @@
 package com.pipeline.framework.core.pipeline;
 
+import com.pipeline.framework.api.component.Component;
 import com.pipeline.framework.api.operator.Operator;
 import com.pipeline.framework.api.sink.DataSink;
 import com.pipeline.framework.api.source.DataSource;
@@ -13,12 +14,13 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
- * 简化的Pipeline实现。
+ * 简化的 Pipeline 实现。
  * <p>
  * 核心逻辑：直接串联 Source.read() → Operators → Sink.write()
- * 不需要显式的 start/stop，让 Reactor 自己管理订阅生命周期。
+ * 使用泛型增强类型安全。
  * </p>
  *
  * @param <IN>  输入类型
@@ -46,6 +48,11 @@ public class SimplePipeline<IN, OUT> implements Pipeline<IN, OUT> {
         this.source = source;
         this.operators = operators;
         this.sink = sink;
+        
+        log.info("Pipeline created: name={}, source={}, operators={}, sink={}",
+            name, source.getName(), 
+            operators.stream().map(Component::getName).collect(Collectors.joining(", ")),
+            sink.getName());
     }
 
     @Override
@@ -54,22 +61,22 @@ public class SimplePipeline<IN, OUT> implements Pipeline<IN, OUT> {
     }
 
     @Override
-    public OperatorChain<IN, OUT> getOperatorChain() {
-        return new DefaultOperatorChain<>(operators);
-    }
-
-    @Override
     public DataSink<OUT> getSink() {
         return sink;
     }
 
+    @Override
+    public List<Operator<?, ?>> getOperators() {
+        return List.copyOf(operators);
+    }
+
     /**
-     * 执行Pipeline的核心方法。
+     * 执行 Pipeline 的核心方法。
      * <p>
      * 清晰的执行流程：
-     * 1. 从Source读取数据流 (Flux)
-     * 2. 依次通过每个Operator转换
-     * 3. 最终写入Sink
+     * 1. 从 Source 读取数据流 (Flux)
+     * 2. 依次通过每个 Operator 转换
+     * 3. 最终写入 Sink
      * 4. 返回执行结果
      * </p>
      */
@@ -87,7 +94,7 @@ public class SimplePipeline<IN, OUT> implements Pipeline<IN, OUT> {
                 // 核心逻辑：构建完整的响应式流
                 Flux<OUT> dataFlow = buildDataFlow();
                 
-                // 执行流并写入Sink
+                // 执行流并写入 Sink
                 return sink.write(dataFlow)
                     .then(Mono.defer(() -> {
                         // 创建执行结果
@@ -142,31 +149,32 @@ public class SimplePipeline<IN, OUT> implements Pipeline<IN, OUT> {
     /**
      * 构建完整的数据流。
      * <p>
-     * 这是Pipeline的核心：将Source、Operators、Sink串联成一个响应式流。
+     * 这是 Pipeline 的核心：将 Source、Operators、Sink 串联成一个响应式流。
+     * 使用泛型确保类型安全。
      * </p>
      */
     @SuppressWarnings("unchecked")
     private Flux<OUT> buildDataFlow() {
         log.debug("Building data flow for pipeline: {}", name);
         
-        // 1. 从Source读取数据
+        // 1. 从 Source 读取数据
         Flux<?> dataFlow = source.read()
             .doOnSubscribe(s -> log.info("Source started: {}", source.getName()))
-            .doOnNext(data -> log.trace("Read from source: {}", data))
+            .doOnNext(data -> {
+                recordsProcessed.incrementAndGet();
+                log.trace("Read from source: {}", data);
+            })
             .doOnComplete(() -> log.info("Source completed: {}", source.getName()))
             .doOnError(e -> log.error("Source error: {}", source.getName(), e));
         
-        // 2. 依次通过每个Operator
+        // 2. 依次通过每个 Operator
         for (int i = 0; i < operators.size(); i++) {
             Operator<Object, Object> operator = (Operator<Object, Object>) operators.get(i);
             final int index = i;
             
             dataFlow = operator.apply((Flux<Object>) dataFlow)
                 .doOnSubscribe(s -> log.debug("Operator[{}] started: {}", index, operator.getName()))
-                .doOnNext(data -> {
-                    recordsProcessed.incrementAndGet();
-                    log.trace("Operator[{}] processed: {}", index, data);
-                })
+                .doOnNext(data -> log.trace("Operator[{}] processed: {}", index, data))
                 .doOnComplete(() -> log.debug("Operator[{}] completed: {}", index, operator.getName()))
                 .doOnError(e -> log.error("Operator[{}] error: {}", index, operator.getName(), e));
         }
@@ -197,5 +205,10 @@ public class SimplePipeline<IN, OUT> implements Pipeline<IN, OUT> {
     @Override
     public String getName() {
         return name;
+    }
+
+    @Override
+    public long getRecordsProcessed() {
+        return recordsProcessed.get();
     }
 }

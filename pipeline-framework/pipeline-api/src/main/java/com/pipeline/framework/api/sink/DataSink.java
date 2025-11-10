@@ -1,104 +1,82 @@
 package com.pipeline.framework.api.sink;
 
+import com.pipeline.framework.api.component.Component;
+import com.pipeline.framework.api.component.ComponentType;
+import com.pipeline.framework.api.component.LifecycleAware;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 数据输出接口。
+ * 数据接收器接口。
  * <p>
- * 负责将处理后的数据写入目标系统。
- * 支持响应式流和背压控制。
+ * 增强的数据接收器接口，继承自 Component，提供统一的抽象。
  * </p>
  *
- * @param <T> 数据类型
+ * @param <IN> 输入数据类型
  * @author Pipeline Framework Team
  * @since 1.0.0
  */
-public interface DataSink<T> {
+public interface DataSink<IN> extends Component<SinkConfig>, LifecycleAware {
 
     /**
      * 写入数据流。
      * <p>
-     * 接收数据流并写入目标系统，返回写入结果。
-     * 支持背压，当目标系统处理不过来时会减慢上游速度。
+     * 消费输入的数据流，写入到目标系统。
      * </p>
      *
-     * @param data 数据流
-     * @return 写入完成信号
+     * @param data 输入数据流
+     * @return 写入完成的 Mono
      */
-    Mono<Void> write(Flux<T> data);
+    Mono<Void> write(Flux<IN> data);
 
     /**
-     * 批量写入。
-     * <p>
-     * 按批次写入数据，提高写入效率。
-     * </p>
+     * 批量写入数据流。
      *
-     * @param data      数据流
+     * @param data      输入数据流
      * @param batchSize 批次大小
-     * @return 写入完成信号
+     * @return 写入完成的 Mono
      */
-    Mono<Void> writeBatch(Flux<T> data, int batchSize);
+    default Mono<Void> writeBatch(Flux<IN> data, int batchSize) {
+        return write(data.buffer(batchSize).flatMap(Flux::fromIterable));
+    }
 
     /**
-     * 启动数据输出。
+     * 获取接收器类型。
      *
-     * @return 启动完成信号
-     */
-    Mono<Void> start();
-
-    /**
-     * 停止数据输出。
-     * <p>
-     * 优雅地关闭，确保所有数据都已写入。
-     * </p>
-     *
-     * @return 停止完成信号
-     */
-    Mono<Void> stop();
-
-    /**
-     * 刷新缓冲区。
-     * <p>
-     * 强制将缓冲区中的数据写入目标系统。
-     * </p>
-     *
-     * @return 刷新完成信号
-     */
-    Mono<Void> flush();
-
-    /**
-     * 获取输出类型。
-     *
-     * @return 输出类型
+     * @return 接收器类型
      */
     SinkType getType();
 
-    /**
-     * 获取输出名称。
-     *
-     * @return 输出名称
-     */
-    String getName();
+    @Override
+    default ComponentType getComponentType() {
+        return ComponentType.SINK;
+    }
+
+    @Override
+    default Mono<Void> start() {
+        return Mono.empty();
+    }
+
+    @Override
+    default Mono<Void> stop() {
+        return Mono.empty();
+    }
 
     /**
-     * 获取输出配置。
+     * 刷新缓冲区。
      *
-     * @return 输出配置
+     * @return 刷新完成的 Mono
      */
-    SinkConfig getConfig();
+    default Mono<Void> flush() {
+        return Mono.empty();
+    }
 
     /**
-     * 判断是否正在运行。
+     * 获取输入数据类型。
      *
-     * @return true如果正在运行
+     * @return 输入类型的 Class
      */
-    boolean isRunning();
-
-    /**
-     * 健康检查。
-     *
-     * @return 健康状态
-     */
-    Mono<Boolean> healthCheck();
+    default Class<IN> getInputType() {
+        return null;
+    }
 }
