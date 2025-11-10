@@ -13,22 +13,22 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Spring 管理的 Operator 工厂。
+ * Operator 工厂。
  * <p>
- * 使用策略模式，通过 Spring 自动注入所有 OperatorCreator 实现。
+ * 使用策略模式，自动注入所有 OperatorCreator 实现。
  * </p>
  *
  * @author Pipeline Framework Team
  * @since 1.0.0
  */
 @Component
-public class SpringOperatorFactory {
+public class OperatorFactory {
     
-    private static final Logger log = LoggerFactory.getLogger(SpringOperatorFactory.class);
+    private static final Logger log = LoggerFactory.getLogger(OperatorFactory.class);
     
     private final Map<String, OperatorCreator> creatorMap = new ConcurrentHashMap<>();
 
-    public SpringOperatorFactory(List<OperatorCreator> creators) {
+    public OperatorFactory(List<OperatorCreator> creators) {
         for (OperatorCreator creator : creators) {
             String type = creator.getType().toLowerCase();
             creatorMap.put(type, creator);
