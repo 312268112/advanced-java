@@ -29,6 +29,13 @@ public interface Checkpoint {
     String getJobId();
 
     /**
+     * 获取实例ID。
+     *
+     * @return 实例ID
+     */
+    String getInstanceId();
+
+    /**
      * 获取创建时间。
      *
      * @return 创建时间
@@ -62,4 +69,11 @@ public interface Checkpoint {
      * @return true如果有效
      */
     boolean isValid();
+
+    /**
+     * 获取检查点类型。
+     *
+     * @return 检查点类型
+     */
+    CheckpointType getType();
 }

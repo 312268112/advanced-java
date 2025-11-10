@@ -1,6 +1,7 @@
 package com.pipeline.framework.core.runtime;
 
 import com.pipeline.framework.api.job.Job;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 /**
@@ -17,9 +18,9 @@ public interface RuntimeContext {
     /**
      * 获取当前Job。
      *
-     * @return Job对象
+     * @return Job对象的Mono
      */
-    Job getJob();
+    Mono<Job> getJob();
 
     /**
      * 获取Reactor调度器。
@@ -33,9 +34,9 @@ public interface RuntimeContext {
      *
      * @param key 配置键
      * @param <T> 值类型
-     * @return 配置值
+     * @return 配置值的Mono
      */
-    <T> T getProperty(String key);
+    <T> Mono<T> getProperty(String key);
 
     /**
      * 获取配置属性（带默认值）。
@@ -53,4 +54,18 @@ public interface RuntimeContext {
      * @return 运行时指标对象
      */
     RuntimeMetrics getMetrics();
+
+    /**
+     * 获取实例ID。
+     *
+     * @return 实例ID
+     */
+    String getInstanceId();
+
+    /**
+     * 获取任务ID。
+     *
+     * @return 任务ID
+     */
+    String getJobId();
 }
