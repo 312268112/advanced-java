@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Operator 工厂。
  * <p>
- * 使用策略模式，自动注入所有 OperatorCreator 实现。
+ * 使用策略模式，通过 Spring 自动注入所有 OperatorCreator 实现。
  * </p>
  *
  * @author Pipeline Framework Team

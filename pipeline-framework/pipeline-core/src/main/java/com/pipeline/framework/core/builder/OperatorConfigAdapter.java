@@ -1,5 +1,6 @@
 package com.pipeline.framework.core.builder;
 
+import com.pipeline.framework.api.graph.StreamNode;
 import com.pipeline.framework.api.operator.OperatorConfig;
 import com.pipeline.framework.api.operator.OperatorType;
 
@@ -7,19 +8,30 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 简单的OperatorConfig实现。
+ * Operator 配置适配器。
+ * <p>
+ * 将 StreamNode 的配置转换为 OperatorConfig。
+ * </p>
  *
  * @author Pipeline Framework Team
  * @since 1.0.0
  */
-public class SimpleOperatorConfig implements OperatorConfig {
+public class OperatorConfigAdapter implements OperatorConfig {
     
     private final OperatorType type;
     private final Map<String, Object> properties;
 
-    public SimpleOperatorConfig(OperatorType type, Map<String, Object> properties) {
+    private OperatorConfigAdapter(OperatorType type, Map<String, Object> properties) {
         this.type = type;
         this.properties = new HashMap<>(properties);
+    }
+
+    public static OperatorConfig from(StreamNode node) {
+        String operatorType = node.getOperatorType();
+        return new OperatorConfigAdapter(
+            OperatorType.valueOf(operatorType.toUpperCase()),
+            node.getConfig()
+        );
     }
 
     @Override

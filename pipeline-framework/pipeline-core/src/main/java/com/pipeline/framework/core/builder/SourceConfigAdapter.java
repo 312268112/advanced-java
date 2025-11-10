@@ -1,29 +1,37 @@
 package com.pipeline.framework.core.builder;
 
-import com.pipeline.framework.api.sink.SinkConfig;
-import com.pipeline.framework.api.sink.SinkType;
+import com.pipeline.framework.api.graph.StreamNode;
+import com.pipeline.framework.api.source.SourceConfig;
+import com.pipeline.framework.api.source.SourceType;
 
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 简单的SinkConfig实现。
+ * Source 配置适配器。
+ * <p>
+ * 将 StreamNode 的配置转换为 SourceConfig。
+ * </p>
  *
  * @author Pipeline Framework Team
  * @since 1.0.0
  */
-public class SimpleSinkConfig implements SinkConfig {
+public class SourceConfigAdapter implements SourceConfig {
     
     private final Map<String, Object> properties;
 
-    public SimpleSinkConfig(Map<String, Object> properties) {
+    private SourceConfigAdapter(Map<String, Object> properties) {
         this.properties = new HashMap<>(properties);
     }
 
+    public static SourceConfig from(StreamNode node) {
+        return new SourceConfigAdapter(node.getConfig());
+    }
+
     @Override
-    public SinkType getType() {
+    public SourceType getType() {
         String type = (String) properties.get("type");
-        return SinkType.valueOf(type.toUpperCase());
+        return SourceType.valueOf(type.toUpperCase());
     }
 
     @Override
@@ -52,17 +60,7 @@ public class SimpleSinkConfig implements SinkConfig {
     }
 
     @Override
-    public long getFlushInterval() {
-        return getProperty("flushInterval", 1000L);
-    }
-
-    @Override
-    public boolean isRetryEnabled() {
-        return getProperty("retryEnabled", true);
-    }
-
-    @Override
-    public int getMaxRetries() {
-        return getProperty("maxRetries", 3);
+    public int getParallelism() {
+        return getProperty("parallelism", 1);
     }
 }

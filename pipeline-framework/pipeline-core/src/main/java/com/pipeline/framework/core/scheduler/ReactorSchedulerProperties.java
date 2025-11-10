@@ -1,4 +1,4 @@
-package com.pipeline.framework.core.config;
+package com.pipeline.framework.core.scheduler;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;

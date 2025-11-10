@@ -10,9 +10,9 @@ import com.pipeline.framework.api.sink.DataSink;
 import com.pipeline.framework.api.sink.SinkConfig;
 import com.pipeline.framework.api.source.DataSource;
 import com.pipeline.framework.api.source.SourceConfig;
-import com.pipeline.framework.core.factory.SpringOperatorFactory;
-import com.pipeline.framework.core.factory.SpringSinkFactory;
-import com.pipeline.framework.core.factory.SpringSourceFactory;
+import com.pipeline.framework.core.factory.OperatorFactory;
+import com.pipeline.framework.core.factory.SinkFactory;
+import com.pipeline.framework.core.factory.SourceFactory;
 import com.pipeline.framework.core.pipeline.Pipeline;
 import com.pipeline.framework.core.pipeline.SimplePipeline;
 import org.slf4j.Logger;
@@ -27,25 +27,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 基于 Spring 的 Graph Pipeline 构建器。
+ * 基于 Graph 的 Pipeline 构建器。
  * <p>
- * 核心改进：
- * 1. 使用 Spring 依赖注入，不再手动创建工厂
- * 2. 使用策略模式，不再使用 switch case
- * 3. 使用 Reactor Scheduler 进行线程管理
+ * 核心功能：
+ * 1. 从 StreamGraph 读取定义
+ * 2. 创建 Source、Operators、Sink 实例
+ * 3. 串联成完整的 Pipeline
  * </p>
  *
  * @author Pipeline Framework Team
  * @since 1.0.0
  */
 @Component
-public class SpringGraphBasedPipelineBuilder {
+public class GraphPipelineBuilder {
     
-    private static final Logger log = LoggerFactory.getLogger(SpringGraphBasedPipelineBuilder.class);
+    private static final Logger log = LoggerFactory.getLogger(GraphPipelineBuilder.class);
     
-    private final SpringSourceFactory sourceFactory;
-    private final SpringSinkFactory sinkFactory;
-    private final SpringOperatorFactory operatorFactory;
+    private final SourceFactory sourceFactory;
+    private final SinkFactory sinkFactory;
+    private final OperatorFactory operatorFactory;
     private final Scheduler pipelineScheduler;
 
     /**
@@ -56,17 +56,17 @@ public class SpringGraphBasedPipelineBuilder {
      * @param operatorFactory   Operator 工厂
      * @param pipelineScheduler Pipeline 调度器
      */
-    public SpringGraphBasedPipelineBuilder(
-            SpringSourceFactory sourceFactory,
-            SpringSinkFactory sinkFactory,
-            SpringOperatorFactory operatorFactory,
+    public GraphPipelineBuilder(
+            SourceFactory sourceFactory,
+            SinkFactory sinkFactory,
+            OperatorFactory operatorFactory,
             @Qualifier("pipelineScheduler") Scheduler pipelineScheduler) {
         this.sourceFactory = sourceFactory;
         this.sinkFactory = sinkFactory;
         this.operatorFactory = operatorFactory;
         this.pipelineScheduler = pipelineScheduler;
         
-        log.info("SpringGraphBasedPipelineBuilder initialized");
+        log.info("GraphPipelineBuilder initialized");
         log.info("Supported sources: {}", sourceFactory.getSupportedTypes());
         log.info("Supported sinks: {}", sinkFactory.getSupportedTypes());
         log.info("Supported operators: {}", operatorFactory.getSupportedTypes());
@@ -78,7 +78,7 @@ public class SpringGraphBasedPipelineBuilder {
      * 完整流程：
      * 1. 验证 Graph
      * 2. 拓扑排序
-     * 3. 使用 Spring Factory 创建组件
+     * 3. 创建组件
      * 4. 组装 Pipeline
      * </p>
      *
@@ -103,20 +103,17 @@ public class SpringGraphBasedPipelineBuilder {
             List<StreamNode> operatorNodes = findOperatorNodes(sortedNodes);
             StreamNode sinkNode = findSinkNode(graph);
             
-            // 4. 创建组件（使用 Spring Factory，无 switch case）
+            // 4. 创建组件
             return createSource(sourceNode)
                 .flatMap(source -> createOperators(operatorNodes)
                     .flatMap(operators -> createSink(sinkNode)
                         .map(sink -> assemblePipeline(graph, source, operators, sink))));
         })
-        .subscribeOn(pipelineScheduler)  // 在 pipeline 调度器上执行
+        .subscribeOn(pipelineScheduler)
         .doOnSuccess(p -> log.info("Pipeline built successfully: {}", graph.getGraphName()))
         .doOnError(e -> log.error("Failed to build pipeline from graph: {}", graph.getGraphId(), e));
     }
 
-    /**
-     * 查找 Source 节点。
-     */
     private StreamNode findSourceNode(StreamGraph graph) {
         List<StreamNode> sourceNodes = graph.getSourceNodes();
         if (sourceNodes.isEmpty()) {
@@ -128,9 +125,6 @@ public class SpringGraphBasedPipelineBuilder {
         return sourceNodes.get(0);
     }
 
-    /**
-     * 查找所有 Operator 节点。
-     */
     private List<StreamNode> findOperatorNodes(List<StreamNode> sortedNodes) {
         List<StreamNode> operatorNodes = new ArrayList<>();
         for (StreamNode node : sortedNodes) {
@@ -141,9 +135,6 @@ public class SpringGraphBasedPipelineBuilder {
         return operatorNodes;
     }
 
-    /**
-     * 查找 Sink 节点。
-     */
     private StreamNode findSinkNode(StreamGraph graph) {
         List<StreamNode> sinkNodes = graph.getSinkNodes();
         if (sinkNodes.isEmpty()) {
@@ -155,26 +146,12 @@ public class SpringGraphBasedPipelineBuilder {
         return sinkNodes.get(0);
     }
 
-    /**
-     * 创建 Source 实例。
-     * <p>
-     * 使用 SpringSourceFactory，自动根据类型选择合适的 Creator。
-     * 无需 switch case！
-     * </p>
-     */
     private Mono<DataSource<?>> createSource(StreamNode sourceNode) {
         log.debug("Creating source from node: {}", sourceNode.getNodeId());
-        
-        SourceConfig config = parseSourceConfig(sourceNode);
+        SourceConfig config = SourceConfigAdapter.from(sourceNode);
         return sourceFactory.createSource(config);
     }
 
-    /**
-     * 创建所有 Operator 实例。
-     * <p>
-     * 使用 Flux.concat 串行创建，保证顺序。
-     * </p>
-     */
     private Mono<List<Operator<?, ?>>> createOperators(List<StreamNode> operatorNodes) {
         log.debug("Creating {} operators", operatorNodes.size());
         
@@ -182,41 +159,23 @@ public class SpringGraphBasedPipelineBuilder {
             return Mono.just(new ArrayList<>());
         }
         
-        // 使用 Flux 串行创建 Operator
         return Flux.fromIterable(operatorNodes)
-            .concatMap(this::createOperator)  // 保证顺序
+            .concatMap(this::createOperator)
             .collectList();
     }
 
-    /**
-     * 创建单个 Operator 实例。
-     * <p>
-     * 使用 SpringOperatorFactory，无需 switch case！
-     * </p>
-     */
     private Mono<Operator<?, ?>> createOperator(StreamNode operatorNode) {
         log.debug("Creating operator from node: {}", operatorNode.getNodeId());
-        
-        OperatorConfig config = parseOperatorConfig(operatorNode);
+        OperatorConfig config = OperatorConfigAdapter.from(operatorNode);
         return operatorFactory.createOperator(config);
     }
 
-    /**
-     * 创建 Sink 实例。
-     * <p>
-     * 使用 SpringSinkFactory，无需 switch case！
-     * </p>
-     */
     private Mono<DataSink<?>> createSink(StreamNode sinkNode) {
         log.debug("Creating sink from node: {}", sinkNode.getNodeId());
-        
-        SinkConfig config = parseSinkConfig(sinkNode);
+        SinkConfig config = SinkConfigAdapter.from(sinkNode);
         return sinkFactory.createSink(config);
     }
 
-    /**
-     * 组装成完整的 Pipeline。
-     */
     @SuppressWarnings("unchecked")
     private Pipeline<?, ?> assemblePipeline(StreamGraph graph,
                                            DataSource<?> source,
@@ -230,30 +189,5 @@ public class SpringGraphBasedPipelineBuilder {
             operators,
             (DataSink<Object>) sink
         );
-    }
-
-    /**
-     * 解析 Source 配置。
-     */
-    private SourceConfig parseSourceConfig(StreamNode node) {
-        return new SimpleSourceConfig(node.getConfig());
-    }
-
-    /**
-     * 解析 Operator 配置。
-     */
-    private OperatorConfig parseOperatorConfig(StreamNode node) {
-        String operatorType = node.getOperatorType();
-        return new SimpleOperatorConfig(
-            OperatorType.valueOf(operatorType.toUpperCase()),
-            node.getConfig()
-        );
-    }
-
-    /**
-     * 解析 Sink 配置。
-     */
-    private SinkConfig parseSinkConfig(StreamNode node) {
-        return new SimpleSinkConfig(node.getConfig());
     }
 }

@@ -1,17 +1,12 @@
-package com.pipeline.framework.core.config;
+package com.pipeline.framework.core.scheduler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
-
-import java.time.Duration;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Reactor 线程池配置。
@@ -28,20 +23,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * @since 1.0.0
  */
 @Configuration
-public class ReactorSchedulerConfig {
+@EnableConfigurationProperties(ReactorSchedulerProperties.class)
+public class ReactorSchedulerConfiguration {
     
-    private static final Logger log = LoggerFactory.getLogger(ReactorSchedulerConfig.class);
+    private static final Logger log = LoggerFactory.getLogger(ReactorSchedulerConfiguration.class);
 
-    /**
-     * IO 密集型操作调度器。
-     * <p>
-     * 适用场景：
-     * - 数据库查询
-     * - HTTP 请求
-     * - 文件读写
-     * - 消息队列操作
-     * </p>
-     */
     @Bean(name = "ioScheduler", destroyMethod = "dispose")
     public Scheduler ioScheduler(ReactorSchedulerProperties properties) {
         ReactorSchedulerProperties.SchedulerConfig ioConfig = properties.getIo();
@@ -58,15 +44,6 @@ public class ReactorSchedulerConfig {
         );
     }
 
-    /**
-     * CPU 密集型操作调度器。
-     * <p>
-     * 适用场景：
-     * - 数据转换
-     * - 计算密集型任务
-     * - 数据聚合
-     * </p>
-     */
     @Bean(name = "computeScheduler", destroyMethod = "dispose")
     public Scheduler computeScheduler(ReactorSchedulerProperties properties) {
         ReactorSchedulerProperties.SchedulerConfig computeConfig = properties.getCompute();
@@ -85,15 +62,6 @@ public class ReactorSchedulerConfig {
         );
     }
 
-    /**
-     * 有界弹性调度器。
-     * <p>
-     * 适用场景：
-     * - 包装阻塞 API（如 JDBC）
-     * - 同步第三方库调用
-     * - 文件系统操作
-     * </p>
-     */
     @Bean(name = "boundedElasticScheduler", destroyMethod = "dispose")
     public Scheduler boundedElasticScheduler(ReactorSchedulerProperties properties) {
         ReactorSchedulerProperties.BoundedElasticConfig config = properties.getBoundedElastic();
@@ -110,15 +78,6 @@ public class ReactorSchedulerConfig {
         );
     }
 
-    /**
-     * Pipeline 执行专用调度器。
-     * <p>
-     * 适用场景：
-     * - Pipeline 主流程执行
-     * - Job 调度
-     * - Graph 构建和执行
-     * </p>
-     */
     @Bean(name = "pipelineScheduler", destroyMethod = "dispose")
     public Scheduler pipelineScheduler(ReactorSchedulerProperties properties) {
         ReactorSchedulerProperties.SchedulerConfig pipelineConfig = properties.getPipeline();
@@ -133,26 +92,5 @@ public class ReactorSchedulerConfig {
             60,
             true
         );
-    }
-
-    /**
-     * 自定义线程工厂。
-     */
-    private static class NamedThreadFactory implements ThreadFactory {
-        private final String namePrefix;
-        private final AtomicLong counter = new AtomicLong(0);
-        private final boolean daemon;
-
-        public NamedThreadFactory(String namePrefix, boolean daemon) {
-            this.namePrefix = namePrefix;
-            this.daemon = daemon;
-        }
-
-        @Override
-        public Thread newThread(Runnable r) {
-            Thread thread = new Thread(r, namePrefix + counter.incrementAndGet());
-            thread.setDaemon(daemon);
-            return thread;
-        }
     }
 }

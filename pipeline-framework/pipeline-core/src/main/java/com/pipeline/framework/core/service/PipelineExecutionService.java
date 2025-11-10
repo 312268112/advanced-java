@@ -1,7 +1,7 @@
 package com.pipeline.framework.core.service;
 
 import com.pipeline.framework.api.graph.StreamGraph;
-import com.pipeline.framework.core.builder.SpringGraphBasedPipelineBuilder;
+import com.pipeline.framework.core.builder.GraphPipelineBuilder;
 import com.pipeline.framework.core.pipeline.Pipeline;
 import com.pipeline.framework.core.pipeline.PipelineResult;
 import org.slf4j.Logger;
@@ -14,7 +14,7 @@ import reactor.core.scheduler.Scheduler;
 /**
  * Pipeline 执行服务。
  * <p>
- * 使用 Spring Service 注解，提供统一的 Pipeline 执行入口。
+ * 提供统一的 Pipeline 执行入口。
  * </p>
  *
  * @author Pipeline Framework Team
@@ -25,11 +25,11 @@ public class PipelineExecutionService {
     
     private static final Logger log = LoggerFactory.getLogger(PipelineExecutionService.class);
     
-    private final SpringGraphBasedPipelineBuilder pipelineBuilder;
+    private final GraphPipelineBuilder pipelineBuilder;
     private final Scheduler pipelineScheduler;
 
     public PipelineExecutionService(
-            SpringGraphBasedPipelineBuilder pipelineBuilder,
+            GraphPipelineBuilder pipelineBuilder,
             @Qualifier("pipelineScheduler") Scheduler pipelineScheduler) {
         this.pipelineBuilder = pipelineBuilder;
         this.pipelineScheduler = pipelineScheduler;

@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Source 工厂。
  * <p>
- * 使用策略模式，自动注入所有 SourceCreator 实现。
+ * 使用策略模式，通过 Spring 自动注入所有 SourceCreator 实现。
  * 不再使用 switch case，每个类型的 Source 都有自己的 Creator。
  * </p>
  *
@@ -32,7 +32,7 @@ public class SourceFactory {
     /**
      * 构造函数注入所有 SourceCreator。
      * <p>
-     * 自动注入所有实现了 SourceCreator 接口的 Bean。
+     * Spring 会自动注入所有实现了 SourceCreator 接口的 Bean。
      * </p>
      *
      * @param creators 所有 SourceCreator 实现
