@@ -1,0 +1,757 @@
+{
+  "examples": [
+    {
+      "name": "简单ETL - Kafka到MySQL",
+      "description": "从Kafka读取用户事件，解析JSON后写入MySQL",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-kafka-001",
+            "node_name": "用户事件源",
+            "node_type": "SOURCE",
+            "operator_type": "KAFKA_SOURCE",
+            "config": {
+              "datasource_id": "kafka-prod",
+              "topics": ["user-events"],
+              "group_id": "user-etl-group",
+              "auto_offset_reset": "latest",
+              "poll_timeout_ms": 1000,
+              "max_poll_records": 500
+            }
+          },
+          {
+            "node_id": "op-map-001",
+            "node_name": "解析JSON",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.ParseJsonFunction",
+              "function_config": {
+                "output_fields": ["user_id", "event_type", "event_time", "properties"]
+              }
+            }
+          },
+          {
+            "node_id": "op-filter-001",
+            "node_name": "过滤有效数据",
+            "node_type": "OPERATOR",
+            "operator_type": "FILTER",
+            "config": {
+              "predicate_expression": "user_id != null && event_type != null"
+            }
+          },
+          {
+            "node_id": "sink-mysql-001",
+            "node_name": "写入MySQL",
+            "node_type": "SINK",
+            "operator_type": "JDBC_SINK",
+            "config": {
+              "datasource_id": "mysql-warehouse",
+              "table": "user_events",
+              "write_mode": "INSERT",
+              "batch_size": 100,
+              "flush_interval_ms": 5000
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-kafka-001",
+            "target_node_id": "op-map-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-map-001",
+            "target_node_id": "op-filter-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-filter-001",
+            "target_node_id": "sink-mysql-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 1000,
+          "backpressure_strategy": "BUFFER",
+          "checkpoint_enabled": true,
+          "checkpoint_interval_seconds": 60
+        }
+      }
+    },
+    {
+      "name": "实时统计 - 窗口聚合",
+      "description": "实时统计每5分钟各城市的订单数和金额",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-001",
+            "node_name": "订单事件流",
+            "node_type": "SOURCE",
+            "operator_type": "KAFKA_SOURCE",
+            "config": {
+              "datasource_id": "kafka-prod",
+              "topics": ["order-events"],
+              "group_id": "order-stats-group",
+              "auto_offset_reset": "latest"
+            }
+          },
+          {
+            "node_id": "op-parse-001",
+            "node_name": "解析订单",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.ParseOrderFunction"
+            }
+          },
+          {
+            "node_id": "op-window-001",
+            "node_name": "5分钟滚动窗口",
+            "node_type": "OPERATOR",
+            "operator_type": "WINDOW",
+            "config": {
+              "window_type": "TUMBLING",
+              "window_size": "5m",
+              "allowed_lateness": "1m"
+            }
+          },
+          {
+            "node_id": "op-agg-001",
+            "node_name": "按城市聚合",
+            "node_type": "OPERATOR",
+            "operator_type": "AGGREGATE",
+            "config": {
+              "group_by_fields": ["city"],
+              "aggregations": [
+                {
+                  "field": "order_id",
+                  "function": "COUNT",
+                  "alias": "order_count"
+                },
+                {
+                  "field": "amount",
+                  "function": "SUM",
+                  "alias": "total_amount"
+                },
+                {
+                  "field": "amount",
+                  "function": "AVG",
+                  "alias": "avg_amount"
+                },
+                {
+                  "field": "amount",
+                  "function": "MAX",
+                  "alias": "max_amount"
+                }
+              ]
+            }
+          },
+          {
+            "node_id": "sink-mysql-001",
+            "node_name": "统计结果入库",
+            "node_type": "SINK",
+            "operator_type": "JDBC_SINK",
+            "config": {
+              "datasource_id": "mysql-warehouse",
+              "table": "order_stats_5m",
+              "write_mode": "INSERT",
+              "batch_size": 50,
+              "field_mapping": {
+                "stat_time": "window_end",
+                "city_name": "city",
+                "order_cnt": "order_count",
+                "total_amt": "total_amount",
+                "avg_amt": "avg_amount",
+                "max_amt": "max_amount"
+              }
+            }
+          },
+          {
+            "node_id": "sink-redis-001",
+            "node_name": "缓存最新统计",
+            "node_type": "SINK",
+            "operator_type": "REDIS_SINK",
+            "config": {
+              "datasource_id": "redis-cache",
+              "key_pattern": "order:stats:5m:{city}",
+              "value_type": "JSON",
+              "expire_seconds": 3600
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-001",
+            "target_node_id": "op-parse-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-parse-001",
+            "target_node_id": "op-window-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-window-001",
+            "target_node_id": "op-agg-001"
+          },
+          {
+            "edge_id": "edge-004",
+            "source_node_id": "op-agg-001",
+            "target_node_id": "sink-mysql-001"
+          },
+          {
+            "edge_id": "edge-005",
+            "source_node_id": "op-agg-001",
+            "target_node_id": "sink-redis-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 2000,
+          "checkpoint_enabled": true,
+          "checkpoint_interval_seconds": 120
+        }
+      }
+    },
+    {
+      "name": "数据清洗 - 去重和转换",
+      "description": "从数据库读取数据，去重、转换后写入数据仓库",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-001",
+            "node_name": "MySQL增量读取",
+            "node_type": "SOURCE",
+            "operator_type": "JDBC_SOURCE",
+            "config": {
+              "datasource_id": "mysql-app",
+              "query": "SELECT * FROM user_actions WHERE updated_at > ? AND updated_at <= ? ORDER BY updated_at",
+              "fetch_size": 5000,
+              "timestamp_column": "updated_at",
+              "increment_type": "TIME_BASED",
+              "poll_interval_seconds": 60
+            }
+          },
+          {
+            "node_id": "op-dedup-001",
+            "node_name": "去重",
+            "node_type": "OPERATOR",
+            "operator_type": "DEDUPLICATE",
+            "config": {
+              "key_fields": ["user_id", "action_id"],
+              "time_window": "1h",
+              "keep_first": true
+            }
+          },
+          {
+            "node_id": "op-map-001",
+            "node_name": "数据转换",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.TransformUserActionFunction",
+              "function_config": {
+                "add_fields": {
+                  "etl_time": "current_timestamp",
+                  "source": "mysql-app"
+                }
+              }
+            }
+          },
+          {
+            "node_id": "op-filter-001",
+            "node_name": "过滤测试数据",
+            "node_type": "OPERATOR",
+            "operator_type": "FILTER",
+            "config": {
+              "predicate_expression": "user_id > 100000 && status == 'valid'"
+            }
+          },
+          {
+            "node_id": "sink-001",
+            "node_name": "写入数仓",
+            "node_type": "SINK",
+            "operator_type": "JDBC_SINK",
+            "config": {
+              "datasource_id": "mysql-dw",
+              "table": "dw_user_actions",
+              "write_mode": "UPSERT",
+              "unique_key": ["user_id", "action_id"],
+              "batch_size": 1000,
+              "use_transaction": true
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-001",
+            "target_node_id": "op-dedup-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-dedup-001",
+            "target_node_id": "op-map-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-map-001",
+            "target_node_id": "op-filter-001"
+          },
+          {
+            "edge_id": "edge-004",
+            "source_node_id": "op-filter-001",
+            "target_node_id": "sink-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 5000,
+          "checkpoint_enabled": true,
+          "checkpoint_interval_seconds": 300
+        }
+      }
+    },
+    {
+      "name": "多分支处理 - 日志分流",
+      "description": "读取日志流，按类型分流到不同的存储",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-001",
+            "node_name": "应用日志流",
+            "node_type": "SOURCE",
+            "operator_type": "KAFKA_SOURCE",
+            "config": {
+              "datasource_id": "kafka-prod",
+              "topics": ["app-logs"],
+              "group_id": "log-processor-group"
+            }
+          },
+          {
+            "node_id": "op-parse-001",
+            "node_name": "解析日志",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.ParseLogFunction"
+            }
+          },
+          {
+            "node_id": "op-filter-error-001",
+            "node_name": "过滤ERROR日志",
+            "node_type": "OPERATOR",
+            "operator_type": "FILTER",
+            "config": {
+              "predicate_expression": "level == 'ERROR'"
+            }
+          },
+          {
+            "node_id": "op-filter-warn-001",
+            "node_name": "过滤WARN日志",
+            "node_type": "OPERATOR",
+            "operator_type": "FILTER",
+            "config": {
+              "predicate_expression": "level == 'WARN'"
+            }
+          },
+          {
+            "node_id": "op-filter-info-001",
+            "node_name": "过滤INFO日志",
+            "node_type": "OPERATOR",
+            "operator_type": "FILTER",
+            "config": {
+              "predicate_expression": "level == 'INFO'"
+            }
+          },
+          {
+            "node_id": "sink-error-001",
+            "node_name": "ERROR日志告警",
+            "node_type": "SINK",
+            "operator_type": "HTTP_SINK",
+            "config": {
+              "url": "https://alert.example.com/api/send",
+              "method": "POST",
+              "headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer ${alert_token}"
+              },
+              "batch_size": 10,
+              "timeout_seconds": 5
+            }
+          },
+          {
+            "node_id": "sink-warn-001",
+            "node_name": "WARN日志入库",
+            "node_type": "SINK",
+            "operator_type": "JDBC_SINK",
+            "config": {
+              "datasource_id": "mysql-log",
+              "table": "warn_logs",
+              "batch_size": 100
+            }
+          },
+          {
+            "node_id": "sink-all-001",
+            "node_name": "全量日志存储",
+            "node_type": "SINK",
+            "operator_type": "ELASTICSEARCH_SINK",
+            "config": {
+              "datasource_id": "es-log-cluster",
+              "index": "app_logs_{date}",
+              "id_field": "log_id",
+              "batch_size": 500,
+              "flush_interval_ms": 3000
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-001",
+            "target_node_id": "op-parse-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-parse-001",
+            "target_node_id": "op-filter-error-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-parse-001",
+            "target_node_id": "op-filter-warn-001"
+          },
+          {
+            "edge_id": "edge-004",
+            "source_node_id": "op-parse-001",
+            "target_node_id": "op-filter-info-001"
+          },
+          {
+            "edge_id": "edge-005",
+            "source_node_id": "op-filter-error-001",
+            "target_node_id": "sink-error-001"
+          },
+          {
+            "edge_id": "edge-006",
+            "source_node_id": "op-filter-warn-001",
+            "target_node_id": "sink-warn-001"
+          },
+          {
+            "edge_id": "edge-007",
+            "source_node_id": "op-parse-001",
+            "target_node_id": "sink-all-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 3000,
+          "backpressure_strategy": "DROP_OLDEST",
+          "checkpoint_enabled": true,
+          "checkpoint_interval_seconds": 180
+        }
+      }
+    },
+    {
+      "name": "API数据采集",
+      "description": "定期从HTTP API拉取数据并存储",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-001",
+            "node_name": "API数据源",
+            "node_type": "SOURCE",
+            "operator_type": "HTTP_SOURCE",
+            "config": {
+              "url": "https://api.example.com/v1/users",
+              "method": "GET",
+              "headers": {
+                "Authorization": "Bearer ${api_token}",
+                "Accept": "application/json"
+              },
+              "query_params": {
+                "page_size": "1000",
+                "updated_after": "${last_updated_time}"
+              },
+              "poll_interval_seconds": 300,
+              "timeout_seconds": 30,
+              "retry_times": 3
+            }
+          },
+          {
+            "node_id": "op-flatmap-001",
+            "node_name": "展开数组",
+            "node_type": "OPERATOR",
+            "operator_type": "FLATMAP",
+            "config": {
+              "function_class": "com.example.etl.function.FlattenArrayFunction",
+              "source_field": "data.users"
+            }
+          },
+          {
+            "node_id": "op-map-001",
+            "node_name": "字段映射",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.MapFieldsFunction",
+              "field_mapping": {
+                "id": "user_id",
+                "name": "user_name",
+                "email": "user_email",
+                "created_at": "create_time",
+                "updated_at": "update_time"
+              }
+            }
+          },
+          {
+            "node_id": "sink-001",
+            "node_name": "写入MySQL",
+            "node_type": "SINK",
+            "operator_type": "JDBC_SINK",
+            "config": {
+              "datasource_id": "mysql-user",
+              "table": "users",
+              "write_mode": "UPSERT",
+              "unique_key": ["user_id"],
+              "batch_size": 200
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-001",
+            "target_node_id": "op-flatmap-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-flatmap-001",
+            "target_node_id": "op-map-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-map-001",
+            "target_node_id": "sink-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 1000,
+          "checkpoint_enabled": false
+        }
+      }
+    },
+    {
+      "name": "文件处理 - CSV到JSON",
+      "description": "读取CSV文件，转换为JSON后写入Kafka",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-001",
+            "node_name": "CSV文件源",
+            "node_type": "SOURCE",
+            "operator_type": "FILE_SOURCE",
+            "config": {
+              "path": "/data/input/*.csv",
+              "format": "CSV",
+              "charset": "UTF-8",
+              "delimiter": ",",
+              "has_header": true,
+              "watch_mode": "CONTINUOUS",
+              "scan_interval_seconds": 30,
+              "file_filter": "user_export_*.csv"
+            }
+          },
+          {
+            "node_id": "op-map-001",
+            "node_name": "转换为JSON",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.CsvToJsonFunction",
+              "function_config": {
+                "include_metadata": true,
+                "timestamp_format": "yyyy-MM-dd HH:mm:ss"
+              }
+            }
+          },
+          {
+            "node_id": "op-filter-001",
+            "node_name": "过滤空行",
+            "node_type": "OPERATOR",
+            "operator_type": "FILTER",
+            "config": {
+              "predicate_expression": "row_data != null && row_data.trim() != ''"
+            }
+          },
+          {
+            "node_id": "sink-kafka-001",
+            "node_name": "写入Kafka",
+            "node_type": "SINK",
+            "operator_type": "KAFKA_SINK",
+            "config": {
+              "datasource_id": "kafka-prod",
+              "topic": "user-import",
+              "key_field": "user_id",
+              "serialization": "JSON",
+              "compression": "gzip",
+              "batch_size": 100
+            }
+          },
+          {
+            "node_id": "sink-file-001",
+            "node_name": "归档JSON文件",
+            "node_type": "SINK",
+            "operator_type": "FILE_SINK",
+            "config": {
+              "path": "/data/archive/users_{date}.json",
+              "format": "JSON",
+              "charset": "UTF-8",
+              "rolling_policy": {
+                "type": "SIZE",
+                "max_size_mb": 100
+              },
+              "compression": "gzip"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-001",
+            "target_node_id": "op-map-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-map-001",
+            "target_node_id": "op-filter-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-filter-001",
+            "target_node_id": "sink-kafka-001"
+          },
+          {
+            "edge_id": "edge-004",
+            "source_node_id": "op-filter-001",
+            "target_node_id": "sink-file-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 2000,
+          "checkpoint_enabled": true,
+          "checkpoint_interval_seconds": 300
+        }
+      }
+    },
+    {
+      "name": "数据关联 - JOIN操作",
+      "description": "订单流关联用户信息和商品信息",
+      "graph_definition": {
+        "version": "1.0",
+        "nodes": [
+          {
+            "node_id": "source-001",
+            "node_name": "订单流",
+            "node_type": "SOURCE",
+            "operator_type": "KAFKA_SOURCE",
+            "config": {
+              "datasource_id": "kafka-prod",
+              "topics": ["orders"],
+              "group_id": "order-enrich-group"
+            }
+          },
+          {
+            "node_id": "op-parse-001",
+            "node_name": "解析订单",
+            "node_type": "OPERATOR",
+            "operator_type": "MAP",
+            "config": {
+              "function_class": "com.example.etl.function.ParseOrderFunction"
+            }
+          },
+          {
+            "node_id": "op-join-user-001",
+            "node_name": "关联用户信息",
+            "node_type": "OPERATOR",
+            "operator_type": "JOIN",
+            "config": {
+              "join_type": "LEFT",
+              "left_key": "user_id",
+              "right_key": "id",
+              "right_source": {
+                "type": "JDBC",
+                "datasource_id": "mysql-user",
+                "query": "SELECT id, name, city, vip_level FROM users WHERE id IN (?)",
+                "cache_enabled": true,
+                "cache_ttl_seconds": 300,
+                "cache_max_size": 10000
+              },
+              "output_fields": ["*", "user.name as user_name", "user.city as user_city", "user.vip_level"]
+            }
+          },
+          {
+            "node_id": "op-join-product-001",
+            "node_name": "关联商品信息",
+            "node_type": "OPERATOR",
+            "operator_type": "JOIN",
+            "config": {
+              "join_type": "LEFT",
+              "left_key": "product_id",
+              "right_key": "id",
+              "right_source": {
+                "type": "REDIS",
+                "datasource_id": "redis-cache",
+                "key_pattern": "product:info:{product_id}"
+              },
+              "output_fields": ["*", "product.name as product_name", "product.category", "product.price"]
+            }
+          },
+          {
+            "node_id": "sink-001",
+            "node_name": "写入ES",
+            "node_type": "SINK",
+            "operator_type": "ELASTICSEARCH_SINK",
+            "config": {
+              "datasource_id": "es-order-cluster",
+              "index": "order_detail_{date}",
+              "id_field": "order_id",
+              "batch_size": 200
+            }
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "edge-001",
+            "source_node_id": "source-001",
+            "target_node_id": "op-parse-001"
+          },
+          {
+            "edge_id": "edge-002",
+            "source_node_id": "op-parse-001",
+            "target_node_id": "op-join-user-001"
+          },
+          {
+            "edge_id": "edge-003",
+            "source_node_id": "op-join-user-001",
+            "target_node_id": "op-join-product-001"
+          },
+          {
+            "edge_id": "edge-004",
+            "source_node_id": "op-join-product-001",
+            "target_node_id": "sink-001"
+          }
+        ],
+        "global_config": {
+          "buffer_size": 1500,
+          "checkpoint_enabled": true,
+          "checkpoint_interval_seconds": 120
+        }
+      }
+    }
+  ]
+}
