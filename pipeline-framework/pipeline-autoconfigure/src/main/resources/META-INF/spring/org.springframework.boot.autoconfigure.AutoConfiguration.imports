@@ -1,0 +1,4 @@
+com.pipeline.framework.autoconfigure.PipelineAutoConfiguration
+com.pipeline.framework.autoconfigure.ExecutorAutoConfiguration
+com.pipeline.framework.autoconfigure.CheckpointAutoConfiguration
+com.pipeline.framework.autoconfigure.MetricsAutoConfiguration

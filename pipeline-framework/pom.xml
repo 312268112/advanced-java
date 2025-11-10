@@ -23,6 +23,7 @@
         <module>pipeline-state</module>
         <module>pipeline-checkpoint</module>
         <module>pipeline-metrics</module>
+        <module>pipeline-autoconfigure</module>
         <module>pipeline-web</module>
         <module>pipeline-starter</module>
     </modules>
@@ -150,6 +151,11 @@
             <dependency>
                 <groupId>com.pipeline.framework</groupId>
                 <artifactId>pipeline-metrics</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.pipeline.framework</groupId>
+                <artifactId>pipeline-autoconfigure</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
