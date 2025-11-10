@@ -1,0 +1,233 @@
+{
+  "简单示例_带关系信息": {
+    "version": "1.0",
+    "metadata": {
+      "name": "用户事件ETL",
+      "flow_diagram": "Kafka → Parse → Filter → MySQL",
+      "description": "从Kafka读取用户事件，解析JSON后过滤，写入MySQL"
+    },
+    "nodes": [
+      {
+        "node_id": "source-001",
+        "node_name": "Kafka数据源",
+        "node_type": "SOURCE",
+        "operator_type": "KAFKA_SOURCE",
+        "upstream": [],
+        "downstream": ["op-parse-001"],
+        "description": "【第1步】从Kafka读取原始数据 → 发送给 op-parse-001",
+        "config": {
+          "datasource_id": "kafka-prod",
+          "topics": ["user-events"],
+          "group_id": "user-etl"
+        }
+      },
+      {
+        "node_id": "op-parse-001",
+        "node_name": "解析JSON",
+        "node_type": "OPERATOR",
+        "operator_type": "MAP",
+        "upstream": ["source-001"],
+        "downstream": ["op-filter-001"],
+        "description": "【第2步】接收 source-001 的数据，解析JSON → 发送给 op-filter-001",
+        "config": {
+          "function_class": "com.example.ParseJsonFunction"
+        }
+      },
+      {
+        "node_id": "op-filter-001",
+        "node_name": "过滤有效数据",
+        "node_type": "OPERATOR",
+        "operator_type": "FILTER",
+        "upstream": ["op-parse-001"],
+        "downstream": ["sink-001"],
+        "description": "【第3步】接收 op-parse-001 的数据，过滤 → 发送给 sink-001",
+        "config": {
+          "predicate_expression": "user_id != null && event_type != null"
+        }
+      },
+      {
+        "node_id": "sink-001",
+        "node_name": "写入MySQL",
+        "node_type": "SINK",
+        "operator_type": "JDBC_SINK",
+        "upstream": ["op-filter-001"],
+        "downstream": [],
+        "description": "【第4步】接收 op-filter-001 的数据，写入MySQL",
+        "config": {
+          "datasource_id": "mysql-warehouse",
+          "table": "user_events",
+          "batch_size": 100
+        }
+      }
+    ],
+    "edges": [
+      {
+        "edge_id": "edge-001",
+        "source_node_id": "source-001",
+        "target_node_id": "op-parse-001",
+        "label": "原始JSON消息"
+      },
+      {
+        "edge_id": "edge-002",
+        "source_node_id": "op-parse-001",
+        "target_node_id": "op-filter-001",
+        "label": "解析后的对象"
+      },
+      {
+        "edge_id": "edge-003",
+        "source_node_id": "op-filter-001",
+        "target_node_id": "sink-001",
+        "label": "有效数据"
+      }
+    ]
+  },
+  "多分支示例_带关系信息": {
+    "version": "1.0",
+    "metadata": {
+      "name": "日志分流处理",
+      "flow_diagram": "Kafka → Parse → [ERROR→HTTP, WARN→MySQL, ALL→ES]",
+      "description": "读取日志流，按级别分流到不同存储"
+    },
+    "nodes": [
+      {
+        "node_id": "source-001",
+        "node_name": "日志流",
+        "node_type": "SOURCE",
+        "operator_type": "KAFKA_SOURCE",
+        "upstream": [],
+        "downstream": ["op-parse-001"],
+        "description": "【第1步】从Kafka读取日志 → 发送给 op-parse-001",
+        "config": {
+          "datasource_id": "kafka-prod",
+          "topics": ["app-logs"]
+        }
+      },
+      {
+        "node_id": "op-parse-001",
+        "node_name": "解析日志",
+        "node_type": "OPERATOR",
+        "operator_type": "MAP",
+        "upstream": ["source-001"],
+        "downstream": ["op-filter-error-001", "op-filter-warn-001", "sink-es-001"],
+        "description": "【第2步】接收 source-001 的数据，解析 → 分发给3个下游节点",
+        "config": {
+          "function_class": "com.example.ParseLogFunction"
+        }
+      },
+      {
+        "node_id": "op-filter-error-001",
+        "node_name": "过滤ERROR",
+        "node_type": "OPERATOR",
+        "operator_type": "FILTER",
+        "upstream": ["op-parse-001"],
+        "downstream": ["sink-http-001"],
+        "description": "【第3步-分支1】接收 op-parse-001 的数据，过滤ERROR → 发送给 sink-http-001",
+        "config": {
+          "predicate_expression": "level == 'ERROR'"
+        }
+      },
+      {
+        "node_id": "op-filter-warn-001",
+        "node_name": "过滤WARN",
+        "node_type": "OPERATOR",
+        "operator_type": "FILTER",
+        "upstream": ["op-parse-001"],
+        "downstream": ["sink-mysql-001"],
+        "description": "【第3步-分支2】接收 op-parse-001 的数据，过滤WARN → 发送给 sink-mysql-001",
+        "config": {
+          "predicate_expression": "level == 'WARN'"
+        }
+      },
+      {
+        "node_id": "sink-http-001",
+        "node_name": "告警API",
+        "node_type": "SINK",
+        "operator_type": "HTTP_SINK",
+        "upstream": ["op-filter-error-001"],
+        "downstream": [],
+        "description": "【第4步-分支1】接收 op-filter-error-001 的数据，发送告警",
+        "config": {
+          "url": "https://alert.example.com/api/send"
+        }
+      },
+      {
+        "node_id": "sink-mysql-001",
+        "node_name": "WARN日志表",
+        "node_type": "SINK",
+        "operator_type": "JDBC_SINK",
+        "upstream": ["op-filter-warn-001"],
+        "downstream": [],
+        "description": "【第4步-分支2】接收 op-filter-warn-001 的数据，写入MySQL",
+        "config": {
+          "datasource_id": "mysql-log",
+          "table": "warn_logs"
+        }
+      },
+      {
+        "node_id": "sink-es-001",
+        "node_name": "全量日志ES",
+        "node_type": "SINK",
+        "operator_type": "ELASTICSEARCH_SINK",
+        "upstream": ["op-parse-001"],
+        "downstream": [],
+        "description": "【第3步-分支3】接收 op-parse-001 的全量数据，写入ES",
+        "config": {
+          "datasource_id": "es-log",
+          "index": "app_logs_{date}"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "edge_id": "edge-001",
+        "source_node_id": "source-001",
+        "target_node_id": "op-parse-001",
+        "label": "原始日志"
+      },
+      {
+        "edge_id": "edge-002",
+        "source_node_id": "op-parse-001",
+        "target_node_id": "op-filter-error-001",
+        "label": "所有日志（分支1）"
+      },
+      {
+        "edge_id": "edge-003",
+        "source_node_id": "op-parse-001",
+        "target_node_id": "op-filter-warn-001",
+        "label": "所有日志（分支2）"
+      },
+      {
+        "edge_id": "edge-004",
+        "source_node_id": "op-parse-001",
+        "target_node_id": "sink-es-001",
+        "label": "所有日志（分支3）"
+      },
+      {
+        "edge_id": "edge-005",
+        "source_node_id": "op-filter-error-001",
+        "target_node_id": "sink-http-001",
+        "label": "ERROR日志"
+      },
+      {
+        "edge_id": "edge-006",
+        "source_node_id": "op-filter-warn-001",
+        "target_node_id": "sink-mysql-001",
+        "label": "WARN日志"
+      }
+    ]
+  },
+  "如何阅读": {
+    "说明": "每个节点都包含upstream和downstream字段，可以直接看出上下游关系",
+    "upstream": "当前节点的数据来自哪些节点（数组）",
+    "downstream": "当前节点的数据发送给哪些节点（数组）",
+    "description": "用中文描述了数据流向，更容易理解",
+    "示例": {
+      "节点定义": {
+        "node_id": "op-parse-001",
+        "upstream": ["source-001"],
+        "downstream": ["op-filter-001"],
+        "含义": "这个节点从source-001接收数据，处理后发送给op-filter-001"
+      }
+    }
+  }
+}

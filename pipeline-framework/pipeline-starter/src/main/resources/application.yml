@@ -1,0 +1,77 @@
+spring:
+  application:
+    name: pipeline-framework
+  profiles:
+    active: dev
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
+
+# Reactor 线程池配置
+reactor:
+  scheduler:
+    # IO 密集型操作线程池（数据库、网络调用等）
+    io:
+      pool-size: 100
+      queue-size: 1000
+      thread-name-prefix: reactor-io-
+    # CPU 密集型操作线程池（计算、转换等）
+    compute:
+      pool-size: ${REACTOR_COMPUTE_POOL_SIZE:0}  # 0 表示使用 CPU 核心数
+      thread-name-prefix: reactor-compute-
+    # 有界弹性线程池（阻塞操作包装）
+    bounded-elastic:
+      pool-size: 200
+      queue-size: 10000
+      ttl-seconds: 60
+      thread-name-prefix: reactor-bounded-
+    # Pipeline 执行专用线程池
+    pipeline:
+      pool-size: 50
+      queue-size: 500
+      thread-name-prefix: pipeline-exec-
+
+# 数据源配置
+datasource:
+  driver-class-name: com.mysql.cj.jdbc.Driver
+  hikari:
+    maximum-pool-size: 20
+    minimum-idle: 5
+    connection-timeout: 30000
+    idle-timeout: 600000
+    max-lifetime: 1800000
+
+# MyBatis Plus 配置
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  mapper-locations: classpath*:mapper/**/*.xml
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.pipeline.framework: DEBUG
+    reactor.core: INFO
+    reactor.netty: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
+
+# 管理端点配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
