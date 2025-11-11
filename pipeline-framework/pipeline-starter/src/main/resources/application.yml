@@ -9,6 +9,57 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
 
+# Pipeline 框架配置
+pipeline:
+  framework:
+    enabled: true
+    # 执行器配置
+    executor:
+      core-pool-size: 10
+      max-pool-size: 50
+      queue-capacity: 500
+      keep-alive-seconds: 60
+      thread-name-prefix: pipeline-exec-
+      execution-timeout-seconds: 0
+      allow-core-thread-timeout: false
+    # 调度器配置
+    scheduler:
+      enabled: true
+      pool-size: 5
+      schedule-check-interval-ms: 1000
+    # 检查点配置
+    checkpoint:
+      enabled: true
+      interval-seconds: 60
+      timeout-seconds: 300
+      min-pause-between-seconds: 10
+      max-concurrent-checkpoints: 1
+      storage-path: ./checkpoints
+      externalized-checkpoint: false
+      retained-checkpoints: 3
+    # 指标配置
+    metrics:
+      enabled: true
+      report-interval-seconds: 30
+      jvm-metrics: true
+      system-metrics: true
+      prefix: pipeline.framework
+    # 状态管理配置
+    state:
+      backend: memory
+      storage-path: ./state
+      incremental-checkpoints: false
+    # SQL批量任务配置
+    sql-batch:
+      enabled: true
+      batch-size: 1000
+      fetch-size: 500
+      query-timeout-seconds: 300
+      parallel-query: true
+      parallelism: 4
+      max-memory-mb: 512
+      auto-commit: false
+
 # Reactor 线程池配置
 reactor:
   scheduler:
