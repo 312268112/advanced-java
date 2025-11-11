@@ -6,13 +6,15 @@ import java.util.List;
  * Connector数据读取器。
  * <p>
  * 提供批量数据读取能力，不依赖Reactor。
+ * 支持泛型配置，提供更强的类型安全。
  * </p>
  *
  * @param <T> 数据类型
+ * @param <C> 配置类型
  * @author Pipeline Framework Team
  * @since 1.0.0
  */
-public interface ConnectorReader<T> {
+public interface ConnectorReader<T, C extends ConnectorConfig> extends Connector<C> {
 
     /**
      * 打开读取器。
