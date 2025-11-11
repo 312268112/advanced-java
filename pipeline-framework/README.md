@@ -4,18 +4,37 @@
 
 ## 核心特性
 
-- ✅ **插件化Connector** - 独立SDK，不依赖Reactor
-- ✅ **能力组合** - 通过接口组合实现灵活的Connector
-- ✅ **响应式流** - 基于Reactor的高性能数据处理
-- ✅ **简单易用** - Connector开发者无需了解Reactor
+- ✅ **简单的Connector接口** - 不依赖Reactor，只需实现简单的读写方法
+- ✅ **增强的能力** - 支持断点续传、事务、进度追踪
+- ✅ **响应式流** - 框架自动将Connector转换为Reactor流
+- ✅ **批量优化** - 批量读写提升性能
 - ✅ **多种Job类型** - 支持流式、批处理、SQL批量任务
+
+## 项目结构
+
+```
+pipeline-framework/
+├── pipeline-api/              # 核心API定义
+│   └── connector/             # Connector接口
+│       ├── ConnectorReader    # 读取器接口
+│       └── ConnectorWriter    # 写入器接口
+├── pipeline-core/             # 框架核心
+│   └── connector/             # Reactor适配器
+│       ├── ReaderSourceAdapter
+│       └── WriterSinkAdapter
+├── pipeline-connectors/       # Connector实现
+│   └── jdbc/                  # JDBC实现
+│       ├── JdbcConnectorReader
+│       └── JdbcConnectorWriter
+└── ...
+```
 
 ## 快速开始
 
-### 1. 开发Connector
+### 1. 实现Reader
 
 ```java
-public class MyReader implements Connector, Readable<Data>, Lifecycle {
+public class MyReader implements ConnectorReader<Data> {
     
     @Override
     public void open() throws Exception {
@@ -23,15 +42,15 @@ public class MyReader implements Connector, Readable<Data>, Lifecycle {
     }
     
     @Override
-    public List<Data> read(int batchSize) throws Exception {
-        // 批量读取数据
+    public List<Data> readBatch(int batchSize) throws Exception {
+        // 批量读取
         List<Data> batch = new ArrayList<>();
         // ... 读取逻辑
         return batch;
     }
     
     @Override
-    public boolean hasMore() {
+    public boolean hasNext() {
         return true;
     }
     
@@ -40,116 +59,119 @@ public class MyReader implements Connector, Readable<Data>, Lifecycle {
         // 关闭连接
     }
     
+    // 可选：支持断点续传
     @Override
-    public String name() {
-        return "my-reader";
+    public boolean supportsCheckpoint() {
+        return true;
+    }
+    
+    @Override
+    public Object getCheckpoint() {
+        return currentOffset;
     }
 }
 ```
 
-### 2. 使用Connector
+### 2. 实现Writer
 
 ```java
-// 创建Connector
-JdbcReader reader = new JdbcReader(dataSource, 
-    "SELECT * FROM orders WHERE date > ?", 
-    List.of(startDate), 
-    1000);
+public class MyWriter implements ConnectorWriter<Data> {
+    
+    @Override
+    public void open() throws Exception {
+        // 打开连接
+    }
+    
+    @Override
+    public void writeBatch(List<Data> records) throws Exception {
+        // 批量写入
+    }
+    
+    @Override
+    public void flush() throws Exception {
+        // 刷新缓冲
+    }
+    
+    @Override
+    public void close() throws Exception {
+        // 关闭连接
+    }
+    
+    // 可选：支持事务
+    @Override
+    public boolean supportsTransaction() {
+        return true;
+    }
+    
+    @Override
+    public void commit() throws Exception {
+        // 提交事务
+    }
+}
+```
+
+### 3. 使用Connector
+
+```java
+// 创建Reader
+JdbcConnectorReader reader = new JdbcConnectorReader(
+    dataSource, 
+    "SELECT * FROM orders WHERE date > ?",
+    List.of(startDate),
+    1000
+);
 
 // 框架转换为Source
-ConnectorSource<Map<String, Object>> source = 
-    new ConnectorSource<>(reader, 1000, config);
+ReaderSourceAdapter<Map<String,Object>> source = 
+    new ReaderSourceAdapter<>(reader, 1000, config);
 
 // 获取响应式流
-Flux<Map<String, Object>> stream = source.getDataStream();
-
-// 处理数据
-stream.map(this::transform)
-      .subscribe();
+Flux<Map<String,Object>> stream = source.getDataStream();
 ```
 
-## 项目结构
+## Connector能力
 
-```
-pipeline-framework/
-├── pipeline-connector-sdk/    # Connector SDK（不依赖Reactor）
-├── pipeline-core/             # 框架核心（Reactor转换）
-├── pipeline-connectors/       # 内置Connector实现
-├── pipeline-api/              # 核心API定义
-├── pipeline-operators/        # 数据处理算子
-├── pipeline-scheduler/        # 任务调度
-├── pipeline-executor/         # 任务执行
-├── pipeline-state/            # 状态管理
-├── pipeline-checkpoint/       # 检查点容错
-├── pipeline-metrics/          # 监控指标
-├── pipeline-web/              # Web API
-└── pipeline-starter/          # Spring Boot启动
-```
+### ConnectorReader
+
+- ✅ 批量读取数据
+- ✅ 检查是否还有数据
+- ✅ 支持断点续传（可选）
+- ✅ 获取读取进度
+- ✅ 统计已读记录数
+
+### ConnectorWriter
+
+- ✅ 单条/批量写入
+- ✅ 刷新缓冲区
+- ✅ 支持事务（可选）
+- ✅ 检查点保存/恢复
+- ✅ 统计已写记录数
 
 ## Job类型
 
 ```java
-STREAMING    // 流式任务（持续运行）- Kafka消费等
-BATCH        // 批处理任务（一次性）- 文件导入等
-SQL_BATCH    // SQL批量任务（多表整合）- 复杂查询聚合
+STREAMING    // 流式任务（持续运行）
+BATCH        // 批处理任务（一次性）
+SQL_BATCH    // SQL批量任务（多表整合）
 ```
 
-## Connector能力接口
+## 示例：JDBC
 
-```java
-Connector    // 标记接口
-├── Readable     // 数据读取能力
-├── Writable     // 数据写入能力
-├── Seekable     // 断点续传能力（可选）
-└── Lifecycle    // 生命周期管理
-```
+参见 `pipeline-connectors/jdbc/` 目录：
+- `JdbcConnectorReader.java` - JDBC读取器
+- `JdbcConnectorWriter.java` - JDBC写入器
 
-## 技术栈
-
-- Java 17
-- Spring Boot 3.2.0
-- Project Reactor 3.6.0
-- MySQL 8.0
-- Kafka（可选）
-- Redis（可选）
-
-## 文档
-
-- [Connector SDK 开发指南](CONNECTOR_SDK_GUIDE.md)
-- [架构说明](ARCHITECTURE.md)
-- [重构完成总结](REFACTORING_COMPLETE.md)
-
-## 示例：JDBC Connector
-
-查看 `pipeline-connectors/sql/` 目录：
-- `JdbcReader.java` - JDBC数据读取
-- `JdbcWriter.java` - JDBC数据写入
-
-## 启动应用
+## 编译运行
 
 ```bash
-# 编译项目
+# 编译
 mvn clean install
 
-# 启动应用
+# 启动
 cd pipeline-starter
 mvn spring-boot:run
 ```
 
-## 核心设计理念
-
-**让专注开发connector的人不关注是否使用reactor，只关注connector本身的能力。**
-
-Connector开发者：
-- ✅ 只实现简单的读写接口
-- ✅ 不需要学习Reactor
-- ✅ 专注业务逻辑
-
-框架使用者：
-- ✅ 自动获得响应式流
-- ✅ 高性能处理
-- ✅ 背压管理
-
 ---
 
-**简单、专注、高效** 🚀
+**简洁、高效、易用** 🚀
