@@ -25,6 +25,10 @@
         </dependency>
         <dependency>
             <groupId>com.pipeline.framework</groupId>
+            <artifactId>pipeline-connector-sdk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.pipeline.framework</groupId>
             <artifactId>pipeline-state</artifactId>
         </dependency>
         <dependency>

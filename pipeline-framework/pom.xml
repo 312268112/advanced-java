@@ -15,6 +15,7 @@
 
     <modules>
         <module>pipeline-api</module>
+        <module>pipeline-connector-sdk</module>
         <module>pipeline-core</module>
         <module>pipeline-connectors</module>
         <module>pipeline-operators</module>
@@ -111,6 +112,11 @@
             <dependency>
                 <groupId>com.pipeline.framework</groupId>
                 <artifactId>pipeline-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.pipeline.framework</groupId>
+                <artifactId>pipeline-connector-sdk</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
